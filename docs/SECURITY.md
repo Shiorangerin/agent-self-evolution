@@ -40,7 +40,6 @@ LLM 调用 ──► 发送给 LLM 提供方（唯一的外发数据）
 | --- | --- | --- |
 | 归一化轨迹 | `$SE_ROOT/logs/tmp/` | 含轨迹内容，建议不进公共仓库 |
 | 候选技能 | `$SE_ROOT/candidates/` | 可能含路径/命令 |
-| 被拒草稿 | `$SE_ROOT/logs/rejected-drafts/` | 可能含 LLM 原文 |
 | 记忆 | `$SE_ROOT/memory/` | 你的偏好与踩坑，属隐私 |
 | 拒绝原因 | `$SE_ROOT/state.json` | 可能提及敏感细节 |
 

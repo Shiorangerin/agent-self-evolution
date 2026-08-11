@@ -38,8 +38,8 @@ description: agent-self-evolution 的每日工作总结 + 自我进化流程（�
 
 ### 第一步：初始化
 
-1. 用 `bat` 阅读 `$SE_ROOT/state.json`，了解当前统计
-2. 用 `bat` 阅读 `$SE_ROOT/logs/experience-log.md` 尾部，了解最近沉淀情况
+1. 用 `python3`/`jq` 只读 `$SE_ROOT/state.json` 的**统计摘要**（`stats`、`lastEvolutionAt`、`lastCollectionAt`），**不读全文**——`rejections`/`collectedUpTo` 明细不进上下文，仅在需要时按需查看
+2. 用 `tail -30 $SE_ROOT/logs/experience-log.md` 只看尾部，了解最近沉淀情况（完整历史在 `logs/archive/` 按月归档）
 
 ### 第二步：审查候选技能
 
@@ -126,7 +126,11 @@ ln -sfn $SE_ROOT/archived/<name> ~/.pi/agent/skills/<name>
 
 1. 更新 `state.json`：`lastEvolutionAt`（当前时间）、`stats.skillsEnabled`、`stats.skillsUpdated`、`stats.candidatesRejected`、`stats.skillsRepaired`（本次修复/补坑的技能数）等计数
 2. 在 `experience-log.md` 追加本次进化总结行：`| 时间 | - | 进化 | 审查X候选：启用A/淘汰B/并入C；更新技能D；记忆+E | - |`
-3. git 提交（保证可追溯回滚；若 `$SE_ROOT` 或其所在目录是 git 仓库）：
+3. **日志维护**（保持文件精简，避免进化时读取膨胀）：
+   - `experience-log.md` 数据行超过 100 行时，把旧条目归档到 `logs/archive/experience-log-YYYY-MM.md`（表头保留，主文件只留最近 40 条）
+   - `state.json` 的 `rejections` 超过 20 条时修剪到最近 10 条（历史在归档日志里）
+   - `collectedUpTo` 由扩展自动清理（只保留仍存在的会话），无需手动处理
+4. git 提交（保证可追溯回滚；若 `$SE_ROOT` 或其所在目录是 git 仓库）：
    ```bash
    cd <仓库根> && git add <SE_ROOT 相对路径>
    git commit -m "self-evolve: <今日工作总结+进化摘要>"

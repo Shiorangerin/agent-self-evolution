@@ -59,7 +59,7 @@ agent_settled / Stop hook 触发
 
 **查重双保险**：① prompt 注入已启用技能清单，要求 LLM 输出 SKIP；② 代码层 slug 完全同名直接拒绝。LLM 不遵守规则时兜底拦截。
 
-**失败可诊断**：LLM 调用失败/空输出/格式不符 → 原始草稿存 `logs/rejected-drafts/`、原因写 `state.json#rejections` 与 `experience-log.md`，但**不打扰用户**。
+**失败可诊断**：LLM 调用失败/空输出/格式不符 → 原因写 `state.json#rejections` 与 `experience-log.md`，但**不打扰用户**。
 
 ## 5. 进化流程（手动）
 

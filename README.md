@@ -145,7 +145,7 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 | `memory/LESSONS.md` | 长期记忆：踩坑经验、失败教训、规避方法 |
 | `logs/experience-log.md` | 经验沉淀日志：每次沉淀的来源、结论、去向，可追溯 |
 | `logs/session-summaries/` | 每日工作总结存档 |
-| `logs/rejected-drafts/` | 被拒草稿：LLM 输出异常时的原始内容备份 |
+| `logs/archive/` | 按月归档的历史经验日志（主日志超限后自动归档） |
 | `state.json` | 系统状态：统计计数、上次进化/采集时间、拒绝原因 |
 | `usage.json` | 技能使用统计（强/弱信号 + 成功/失败/未知结果归因 + 失败原因） |
 | `core/` | 平台无关核心（collect.py / init.py / templates） |
@@ -237,7 +237,7 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 
 ### 10. 失败可诊断
 
-所有被拒绝的采集都有原因记录（`state.json` 的 `rejections` + `logs/experience-log.md`），LLM 输出异常时原始草稿会备份到 `logs/rejected-drafts/`。系统「静默但不黑盒」。
+所有被拒绝的采集都有原因记录（`state.json` 的 `rejections` + `logs/experience-log.md`，原因含 LLM 返回的错误信息）。系统「静默但不黑盒」。
 
 ### 11. 轻量、零第三方依赖
 
@@ -267,7 +267,7 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 - **缓解措施**：
   - 敏感项目里请调低采集阈值或直接禁用采集（删除/停用 hook）；
   - 使用自托管/私有模型作为采集后端（`SE_API_BASE` 指向私有端点）；
-  - 定期检查 `logs/rejected-drafts/` 与 `candidates/`，确认没有敏感内容；
+  - 定期检查 `candidates/`，确认没有敏感内容；
   - 数据目录（`$SE_ROOT`）不要推到公共仓库——它包含你的轨迹来源与记忆。
 - 除 LLM 调用外，系统**所有数据都存储在本地**明文文件中，不上传任何云端。
 
@@ -316,9 +316,8 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 - 本项目对已知格式做了兼容处理，但**不保证**未来版本不破坏；
 - 缓解：失败静默 + 日志记录；发现问题时到仓库提 issue。
 
-### R10. 被拒草稿与日志可能包含敏感信息
+### R10. 日志可能包含敏感信息
 
-- `logs/rejected-drafts/` 保存了 LLM 的原始输出（可能包含轨迹内容）；
 - `state.json` 的 `rejections` 记录了拒绝原因（可能提及敏感细节）；
 - 这些文件默认留在本地，**不要**提交到公共仓库；可随时删除。
 

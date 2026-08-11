@@ -39,7 +39,7 @@
 对每个候选三选一，**所有动作都必须在 `logs/` 留痕**：
 
 - **启用**（全新技能）：`mkdir -p skills/<slug>/` → `cp candidates/<slug>/SKILL.md skills/<slug>/SKILL.md`
-  → 在 `logs/enabled-candidates/` 记录（技能名、来源会话、启用时间）→ 删除候选目录
+  → 在 `logs/experience-log.md` 记录（技能名、来源会话、启用时间）→ 删除候选目录
 - **并入**（与已有技能高度相关）：用 edit 把候选内容合并进 `skills/<已有>/SKILL.md`，
   更新 description 与正文 → 在 `logs/` 记录并入来源 → 删除候选目录
 - **淘汰**（格式不符 / 重复 / 无价值）：在 `candidates/<slug>/meta.md` 末尾追加

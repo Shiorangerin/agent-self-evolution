@@ -48,7 +48,6 @@ MEMORY_DIR = SE_ROOT / "memory"
 STATE_FILE = SE_ROOT / "state.json"
 USAGE_FILE = SE_ROOT / "usage.json"
 LOG_FILE = LOGS_DIR / "experience-log.md"
-REJECTED_DRAFTS_DIR = LOGS_DIR / "rejected-drafts"
 
 MIN_TOOL_CALLS = int(os.environ.get("SE_MIN_TOOL_CALLS", "5"))   # 工具调用触发阈值
 MAX_CANDIDATES = int(os.environ.get("SE_MAX_CANDIDATES", "20"))  # 候选区堆积上限
@@ -110,23 +109,6 @@ def record_rejection(state: dict, session: str, reason: str) -> None:
         "reason": reason[:300],
     })
     state["rejections"] = rejections[-20:]
-
-
-def save_draft_dump(session: str, tool_calls: int, errors: int, raw: str, extra: str = "") -> str:
-    try:
-        REJECTED_DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
-        path = REJECTED_DRAFTS_DIR / f"{int(time.time() * 1000)}.md"
-        path.write_text(
-            f"# 被拒草稿（{now_iso()}）\n"
-            f"来源会话: {session}\n"
-            f"工具调用: {tool_calls} 次 / 错误: {errors} 次\n"
-            f"{('备注: ' + extra + chr(10)) if extra else ''}"
-            f"--- 以下为 LLM 原始输出 ---\n\n{raw or '（空）'}",
-            encoding="utf-8",
-        )
-        return str(path)
-    except Exception:
-        return ""
 
 
 def list_enabled_skills() -> list:
@@ -418,10 +400,9 @@ def collect(transcript: str, session: str, offset: int = None,
     slug = slugify(name or "untitled-skill")
 
     def reject(reason: str) -> str:
-        draft = save_draft_dump(session, tool_calls, errors, raw, reason)
         state["stats"]["candidatesRejected"] = state["stats"].get("candidatesRejected", 0) + 1
         state["lastCollectionAt"] = now_iso()
-        record_rejection(state, session, f"{reason}{'（原始草稿已存: ' + draft + '）' if draft else ''}")
+        record_rejection(state, session, reason)
         _advance(state, session, offset, transcript)
         write_state(state)
         append_log(f"| {now_local()} | {session} | 拒绝沉淀 | {reason[:100]} | - |")

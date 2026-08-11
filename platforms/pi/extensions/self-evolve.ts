@@ -200,17 +200,44 @@ function advanceCollection(state: any, shortName: string, entries: any[]) {
 	}
 }
 
-/** 保存 LLM 原始输出草稿供排查 */
-function saveDraftDump(sessionFile: string, toolCalls: number, errors: number, raw: string, extra = "") {
-	const draftDir = join(EVO_DIR, "logs", "rejected-drafts");
-	mkdirSync(draftDir, { recursive: true });
-	const draftFile = join(draftDir, `${Date.now()}.md`);
-	writeFileSync(
-		draftFile,
-		`# 被拒草稿（${nowIso()}）\n来源会话: ${sessionFile.split("/").pop()}\n工具调用: ${toolCalls} 次 / 错误: ${errors} 次\n${extra ? `备注: ${extra}\n` : ""}--- 以下为 LLM 原始输出 ---\n\n${raw || "（空）"}`,
-		"utf8",
-	);
-	return draftFile;
+/**
+ * 清理 collectedUpTo：删除 sessions 目录下已不存在的会话条目（只增不减会无限膨胀）。
+ * 注意：sessions 下按工作目录分子目录存放 jsonl，必须递归扫描（不能直接 join 判断）。
+ * 在每次采集写入前调用，保持 state.json 精简（增量采集位置仅对仍存在的会话有意义）。
+ */
+function pruneCollectedUpTo(state: any) {
+	try {
+		const sessionsDir = join(homedir(), ".pi", "agent", "sessions");
+		const collected = state.collectedUpTo ?? {};
+		const names = Object.keys(collected);
+		if (names.length === 0) return;
+		// 递归收集所有存在的 jsonl 短文件名
+		const alive = new Set<string>();
+		const walk = (dir: string) => {
+			let entries: import("node:fs").Dirent[] = [];
+			try {
+				entries = readdirSync(dir, { withFileTypes: true });
+			} catch {
+				return;
+			}
+			for (const en of entries) {
+				if (en.name.startsWith(".")) continue;
+				if (en.isDirectory()) walk(join(dir, en.name));
+				else if (en.isFile() && en.name.endsWith(".jsonl")) alive.add(en.name);
+			}
+		};
+		walk(sessionsDir);
+		let removed = 0;
+		for (const name of names) {
+			if (!alive.has(name)) {
+				delete collected[name];
+				removed++;
+			}
+		}
+		if (removed > 0) state.collectedUpTo = collected;
+	} catch {
+		/* 静默 */
+	}
 }
 
 /**
@@ -345,19 +372,16 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 			const stopReason = (response as any).stopReason ?? "unknown";
 			const errorMessage = ((response as any).errorMessage ?? "") as string;
 
-			// LLM 调用失败或空输出 → 记录真实原因（暂时性失败：不推进采集点，修复后可重试补采）
+			// LLM 调用失败或空输出 → 记录真实原因（暂时性失败：不推进采集点，修复后可重试补采；原始草稿不再落盘）
 			if (stopReason === "error" || !raw) {
 				const reason =
 					stopReason === "error" && errorMessage
 						? `LLM 调用失败: ${errorMessage.slice(0, 200)}`
 						: `LLM 返回空内容（stopReason=${stopReason}），maxTokens=${MAX_OUTPUT_TOKENS} 可能不足`;
-				let draftPath = "";
-				try {
-					draftPath = saveDraftDump(sessionFile, toolCalls, errors, raw, reason);
-				} catch { /* ignore */ }
 				state.stats.candidatesRejected = (state.stats.candidatesRejected ?? 0) + 1;
 				state.lastCollectionAt = nowIso();
-				recordRejection(state, sessionFile, draftPath ? `${reason}（草稿已存: ${draftPath}）` : reason);
+				recordRejection(state, sessionFile, reason);
+				pruneCollectedUpTo(state);
 				writeState(state);
 				appendLog(`| ${nowLocal()} | ${sessionFile.split("/").pop()} | 采集失败 | ${reason.slice(0, 100)} | - |`);
 				return `❌ ${reason}`;
@@ -383,14 +407,11 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 			const slug = slugify(name || "untitled-skill");
 			if (!name) {
 				const reason = "LLM 草稿缺少合法 name（frontmatter 格式不符）";
-				let draftPath = "";
-				try {
-					draftPath = saveDraftDump(sessionFile, toolCalls, errors, raw);
-				} catch { /* ignore */ }
 				state.stats.candidatesRejected = (state.stats.candidatesRejected ?? 0) + 1;
 				state.lastCollectionAt = nowIso();
-				recordRejection(state, sessionFile, draftPath ? `${reason}（原始草稿已存: ${draftPath}）` : reason);
+				recordRejection(state, sessionFile, reason);
 				advanceCollection(state, shortName, entries);
+				pruneCollectedUpTo(state);
 				writeState(state);
 				appendLog(`| ${nowLocal()} | ${sessionFile.split("/").pop()} | 拒绝沉淀 | ${reason} | - |`);
 				return `❌ ${reason}`;
@@ -399,14 +420,11 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 			// 代码层查重：slug 与已启用技能完全同名 → 拒绝（LLM 未遵守查重规则的保险丝）
 			if (enabledSkills.some((s) => s.name === slug)) {
 				const reason = `与已启用技能 ${slug} 完全同名（查重拦截，LLM 未遵守查重规则）`;
-				let draftPath = "";
-				try {
-					draftPath = saveDraftDump(sessionFile, toolCalls, errors, raw, reason);
-				} catch { /* ignore */ }
 				state.stats.candidatesRejected = (state.stats.candidatesRejected ?? 0) + 1;
 				state.lastCollectionAt = nowIso();
-				recordRejection(state, sessionFile, draftPath ? `${reason}（草稿已存: ${draftPath}）` : reason);
+				recordRejection(state, sessionFile, reason);
 				advanceCollection(state, shortName, entries);
+				pruneCollectedUpTo(state);
 				writeState(state);
 				appendLog(`| ${nowLocal()} | ${sessionFile.split("/").pop()} | 拒绝沉淀 | ${reason.slice(0, 100)} | - |`);
 				return `❌ ${reason}`;

@@ -51,11 +51,11 @@ cat ~/.config/agent-self-evolution/state.json   # 系统状态
 - **「codex CLI 失败」** → `codex exec` 不可用或未登录；Codex 多行 prompt 问题已通过 stdin 方式规避；
 - **「LLM 返回空内容」** → 模型输出预算不足（调大 `SE_MAX_OUTPUT_TOKENS`）或模型拒绝任务；
 - **「无法获取模型凭证」**（Pi）→ pi 模型注册表问题，检查 pi 本身可用性；
-- 原始草稿在 `$SE_ROOT/logs/rejected-drafts/`。
+- 拒绝原因与错误信息记录在 `$SE_ROOT/state.json` 的 `rejections` 中。
 
 ## 症状 4：候选格式不符被拒
 
-- 检查 `logs/rejected-drafts/` 里的原始 LLM 输出，确认是否是模型没遵守 frontmatter 格式；
+- 查看 `state.json` 的 `rejections` 中的拒绝原因，确认是否是模型没遵守 frontmatter 格式；
 - `description` 超长（>1024 字符）、`name` 含大写/空格是常见拒绝原因；
 - 这是**预期行为**：格式校验是安全护栏，宁缺毋滥。
 
@@ -73,8 +73,8 @@ cat ~/.config/agent-self-evolution/state.json   # 系统状态
 
 ## 症状 7：磁盘占用
 
-- `$SE_ROOT` 内容量最大的是 `logs/rejected-drafts/`（被拒草稿）与 `logs/tmp/`（归一化轨迹）；
-- 定期清理：`rm -rf $SE_ROOT/logs/tmp $SE_ROOT/logs/rejected-drafts/*`（保留最近即可）；
+- `$SE_ROOT` 内容量最大的是 `logs/tmp/`（归一化轨迹）；
+- 定期清理：`rm -rf $SE_ROOT/logs/tmp/*`（保留最近即可）；
 - `candidates/` 审查后可删除已淘汰项。
 
 ## 症状 8：跨平台数据不一致

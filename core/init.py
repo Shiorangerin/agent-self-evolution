@@ -27,9 +27,7 @@ STRUCTURE = [
     "skills",
     "memory",
     "logs/session-summaries",
-    "logs/enabled-candidates",
-    "logs/rejected-candidates",
-    "logs/rejected-drafts",
+    "logs/archive",
 ]
 
 
