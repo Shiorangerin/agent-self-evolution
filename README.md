@@ -412,13 +412,7 @@ A：刻意设计。自动唤醒会反复打断你、消耗 token、并可能在�
 
 ## 贡献
 
-欢迎 PR / Issue：
-
-- 新平台适配（有 transcript + hooks 的 agent 都可接入）；
-- 更稳的 transcript 归一化（尤其 Codex 新版本格式）；
-- 英文翻译、文档改进。
-
-开发约定：核心（`core/`）保持 Python 标准库零依赖；平台适配保持「薄层」——只做轨迹归一化与 hook 注册，业务逻辑都在 core。
+欢迎 PR / Issue
 
 ---
 
