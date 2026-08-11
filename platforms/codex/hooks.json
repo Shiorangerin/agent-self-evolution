@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "command": "bash $HOME/.config/agent-self-evolution/platforms/codex/hooks/collect.sh"
+      }
+    ]
+  }
+}

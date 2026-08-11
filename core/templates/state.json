@@ -1,0 +1,16 @@
+{
+  "createdAt": "INIT_TIME",
+  "lastEvolutionAt": null,
+  "lastCollectionAt": null,
+  "stats": {
+    "sessionsAnalyzed": 0,
+    "candidatesCreated": 0,
+    "skillsEnabled": 0,
+    "skillsUpdated": 0,
+    "candidatesRejected": 0,
+    "candidatesMerged": 0
+  },
+  "rejections": [],
+  "lastSeenAt": null,
+  "collectedUpTo": {}
+}

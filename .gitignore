@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# 数据目录（安装后生成，含个人轨迹与记忆，绝不入库）
+config/
+*.jsonl
+
+# 编辑器
+.idea/
+.vscode/
