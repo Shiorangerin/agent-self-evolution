@@ -76,10 +76,22 @@ description: agent-self-evolution 的每日工作总结 + 自我进化流程（�
 
 ### 第三步：更新现有技能
 
-0. **技能体检（使用情况报告）**：读取 `$SE_ROOT/usage.json`（由扩展 skill-usage 维护，纯规则零 LLM 成本），对每个已启用技能计算 `lastUsedAt` 距今天数，列出 **≥60 天未使用**的技能清单（含最后使用时间、次数），向用户汇报并**征求归档决定**：
+0. **技能体检（使用情况报告）**：读取 `$SE_ROOT/usage.json`（由扩展 skill-usage 维护，纯规则零 LLM 成本），对每个已启用技能做**三线体检**，向用户汇报并征求处置决定：
+
+   **① 闲置技能**：`lastUsedAt` 距今天数 **≥60 天** 未使用（含从未被记录过使用且启用已超 60 天的），列出清单（最后使用时间、次数），征求归档决定：
    - 用户确认归档 → 执行归档操作（见下方「归档技能」）
    - 用户决定保留 → 不动，记入汇报
-   - 从未被记录过使用（usage.json 无条目）且启用已超 60 天的技能，同样列入清单提示
+
+   **② 问题技能（健康度）**：读取每个技能的 `outcomes`（success/failure/unknown）与 `failReasons`，计算失败次数与失败率 `failure/(success+failure)`，列出 **失败 ≥2 次，或失败率 >50% 且失败 ≥1 次** 的技能清单（附 failReasons 报错原文片段），逐一复核处置：
+   - 先看 `usage.json` 里的 `failReasons`，必要时回会话记录读该技能 `lastSession` 的原始轨迹确认失败原因（结果归因是启发式，可能误判，以原始轨迹为准）
+   - **坑点缺失**：失败原因属于技能未覆盖的场景/坑 → 用 `edit` 给该技能 SKILL.md 补「常见坑点」，`state.json` 的 `stats.skillsRepaired` +1
+   - **步骤错误/过时**：技能内容与实际不符 → 用 `edit` 重写对应步骤，同样记 `stats.skillsRepaired` +1
+   - **屡败零胜**（failure ≥3 且 success = 0）→ 建议淘汰，征求用户决定
+   - 拿不准的向用户汇报求决策，绝不自行删技能
+
+   **③ 优质技能**：`success ≥3` 且失败率为 0 的技能 → 汇报中确认「表现良好」，不做任何操作
+
+   汇报时给出每个技能的使用次数与成功/失败/未知计数，让用户一眼看清谁好谁坏。
 
 阅读 `memory/LESSONS.md`、今天的会话总结与近期 `experience-log.md`，判断是否有现有技能需要更新：
 - 步骤过时/有更优做法/有新增坑点 → 用 `edit` 修改 `$SE_ROOT/skills/<name>/SKILL.md`（软链指向源文件）
@@ -112,7 +124,7 @@ ln -sfn $SE_ROOT/archived/<name> ~/.pi/agent/skills/<name>
 
 ### 第五步：收尾
 
-1. 更新 `state.json`：`lastEvolutionAt`（当前时间）、`stats.skillsEnabled`、`stats.skillsUpdated`、`stats.candidatesRejected` 等计数
+1. 更新 `state.json`：`lastEvolutionAt`（当前时间）、`stats.skillsEnabled`、`stats.skillsUpdated`、`stats.candidatesRejected`、`stats.skillsRepaired`（本次修复/补坑的技能数）等计数
 2. 在 `experience-log.md` 追加本次进化总结行：`| 时间 | - | 进化 | 审查X候选：启用A/淘汰B/并入C；更新技能D；记忆+E | - |`
 3. git 提交（保证可追溯回滚；若 `$SE_ROOT` 或其所在目录是 git 仓库）：
    ```bash
