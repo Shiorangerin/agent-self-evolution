@@ -74,5 +74,11 @@ if [ ! -f "$COLLECT_PY" ]; then
 fi
 python3 "$COLLECT_PY" --transcript "$tmp_out" --session "$short" 2>/dev/null || true
 
+# 4b. 技能使用统计（纯规则，写 usage.json，供进化流程「技能体检」使用）
+TRACK_PY="${SE_ROOT}/core/track_usage.py"
+if [ -f "$TRACK_PY" ]; then
+    python3 "$TRACK_PY" --transcript "$tmp_out" --session "$short" 2>/dev/null || true
+fi
+
 # 5. 采集失败绝不阻塞 agent
 exit 0

@@ -372,7 +372,8 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 			const stopReason = (response as any).stopReason ?? "unknown";
 			const errorMessage = ((response as any).errorMessage ?? "") as string;
 
-			// LLM 调用失败或空输出 → 记录真实原因（暂时性失败：不推进采集点，修复后可重试补采；原始草稿不再落盘）
+			// LLM 调用失败或空输出 → 记录真实原因（原始草稿不再落盘，rejections 里已有原因）
+			// 失败也推进采集点：避免 LLM 后端故障时每次 agent_settled 都重试同一段，白耗成本。
 			if (stopReason === "error" || !raw) {
 				const reason =
 					stopReason === "error" && errorMessage
@@ -381,6 +382,7 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 				state.stats.candidatesRejected = (state.stats.candidatesRejected ?? 0) + 1;
 				state.lastCollectionAt = nowIso();
 				recordRejection(state, sessionFile, reason);
+				advanceCollection(state, shortName, entries);
 				pruneCollectedUpTo(state);
 				writeState(state);
 				appendLog(`| ${nowLocal()} | ${sessionFile.split("/").pop()} | 采集失败 | ${reason.slice(0, 100)} | - |`);
@@ -455,11 +457,12 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 			);
 			return `🎉 已生成候选技能: ${slug}（工具${toolCalls}次/错误${errors}次）`;
 		} catch (e) {
-			// 暂时性失败（LLM 异常）：不推进采集点，修复后可重试补采
+			// LLM 调用异常：记录原因并推进采集点（理由同上，避免后端故障时反复重试）
 			const reason = `LLM 调用异常: ${String(e).slice(0, 200)}`;
 			state.stats.candidatesRejected = (state.stats.candidatesRejected ?? 0) + 1;
 			state.lastCollectionAt = nowIso();
 			recordRejection(state, sessionFile, reason);
+			advanceCollection(state, shortName, entries);
 			writeState(state);
 			appendLog(`| ${nowLocal()} | ${sessionFile.split("/").pop()} | 采集失败 | ${reason.slice(0, 100)} | - |`);
 			return `❌ ${reason}`;

@@ -37,11 +37,17 @@
    - **淘汰**：在候选 `meta.md` 末尾追加 `candidate-verdict: rejected` 并写明原因，然后删除该候选目录。
 6. 向用户汇报每个候选的处置结论（启用 / 并入 / 淘汰及理由）。
 
-### 第三步：技能体检
+### 第三步：技能体检（三线：闲置 / 问题 / 优质）
 
-1. 读取 `$SE_ROOT/usage.json`。
-2. 列出 ≥60 天未使用的技能，逐一征求用户的归档决定。
-3. 用户确认后归档：`mv $SE_ROOT/skills/<name> $SE_ROOT/archived/`，并从技能加载目录移除对应软链 / 文件；恢复时反向操作（移回并重建软链 / 文件）。
+1. 读取 `$SE_ROOT/usage.json`（由 hook 调用 `core/track_usage.py` 维护，纯规则零 LLM 成本）。
+2. **闲置技能**：列出 `lastUsedAt` 距今 ≥60 天未使用（含从未被记录过使用且启用已超 60 天的）的技能，逐一征求用户的归档决定；用户确认后归档：`mv $SE_ROOT/skills/<name> $SE_ROOT/archived/`，并从技能加载目录移除对应软链 / 文件；恢复时反向操作（移回并重建软链 / 文件）。
+3. **问题技能（健康度）**：读取每个技能的 `outcomes`（success/failure/unknown）与 `failReasons`，计算失败率 `failure/(success+failure)`，列出 **失败 ≥2 次，或失败率 >50% 且失败 ≥1 次** 的技能清单（附报错原文片段），逐一复核：
+   - 失败原因属于技能未覆盖的坑 → 给该技能 SKILL.md 补「常见坑点」，`state.json` 的 `stats.skillsRepaired` +1
+   - 技能内容与实际不符 → 重写对应步骤，同样记 `stats.skillsRepaired` +1
+   - 屡败零胜（failure ≥3 且 success = 0）→ 建议淘汰，征求用户决定
+   - 结果归因是启发式，可能误判：必要时回读该技能 `lastSession` 的原始轨迹确认
+4. **优质技能**：`success ≥3` 且失败率为 0 → 确认「表现良好」，不做任何操作
+5. 汇报时给出每个技能的使用次数与成功/失败/未知计数，让用户一眼看清谁好谁坏。
 
 ### 第四步：维护记忆
 

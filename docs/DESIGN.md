@@ -68,7 +68,7 @@ agent_settled / Stop hook 触发
 五步：
 1. 初始化：读 state.json、experience-log 尾部；
 2. 审查候选：格式校验（name/description/大小）→ 查重 → 价值评估 → 启用（mkdir+cp+ln）/ 并入 / 淘汰（meta.md 记 verdict）；
-3. 技能体检：usage.json ≥60 天未用 → 征求用户归档决定；
+3. 技能体检（三线）：usage.json 的 outcomes/failReasons → 闲置（≥60 天未用）/ 问题（失败率高）/ 优质（成功率高）三级处置，征求用户决定；
 4. 维护记忆：USER.md（纯净条目）+ LESSONS.md（格式模板）；
 5. 收尾：state.json 计数 + 经验日志 + git 提交。
 
@@ -76,7 +76,17 @@ agent_settled / Stop hook 触发
 
 ## 6. 使用统计（反馈回路）
 
-纯规则零成本：扫描轨迹文本，命中技能路径（强信号）或 slug（弱信号）即记录。用于「长期未使用技能」体检，支撑归档决策。**决策权永远在用户**。
+纯规则零成本：扫描轨迹文本，命中技能路径（强信号）或 slug（弱信号）即记录，并对强信号技能做
+**结果归因**（成功/失败/未知 + 失败原因原文片段）。用于「技能体检」三线处置（闲置/问题/优质），
+支撑归档、补坑与淘汰决策。**决策权永远在用户**。
+
+实现：Pi 平台为 TS 扩展 `skill-usage.ts`（agent_settled 触发）；Claude Code / Codex 平台为
+Python 等价实现 `core/track_usage.py`（hook 归一化轨迹后调用），两者写同一份 `usage.json`。
+
+**误判防护**（启发式归因的副作用，两实现均有）：
+- 补齐旧条目缺失的 `outcomes`/`failReasons` 字段，防进化体检 KeyError；
+- 强信号匹配带尾斜杠/文件名（`skills/<slug>/` 而非 `skills/<slug>`），避免 `foo` 误匹配 `foobar`；
+- 审查/盘点类会话（一次性批量读取 ≥5 个 SKILL.md）跳过结果归因，避免无关错误被记到单个技能头上。
 
 ## 7. 成本控制矩阵
 

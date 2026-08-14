@@ -200,7 +200,33 @@ function track(pi: ExtensionAPI, ctx: any): string {
 
 		const usage = readUsage();
 		const skills = usage.skills ?? {};
+		// 补齐旧条目缺失的 outcomes/failReasons（旧版扩展写入的弱信号条目没有这些字段），
+		// 防止后续读取时 KeyError（进化体检遍历 usage.json 直接访问 outcomes）。
+		for (const key of Object.keys(skills)) {
+			const s = skills[key];
+			if (!s || typeof s !== "object") continue;
+			if (!s.outcomes || typeof s.outcomes !== "object") {
+				s.outcomes = { success: 0, failure: 0, unknown: 0 };
+			}
+			if (!Array.isArray(s.failReasons)) {
+				s.failReasons = [];
+			}
+		}
 		let hit = 0;
+		// 先统计本会话强信号技能数量（强信号 = 真读取了技能文件）。
+		// 进化审查/盘点类会话会一次性批量读取大量 SKILL.md，之后会话内任何无关错误
+		// （如 cat -A 报错、体检脚本 KeyError）都不该被归因到单个技能，故跳过结果归因。
+		let strongHits = 0;
+		for (const slug of skillNames) {
+			for (let i = 0; i < entries.length; i++) {
+				const t = entryText(entries[i]);
+				if (t.includes(`skills/${slug}/SKILL.md`) || t.includes(`skills/${slug}/`)) {
+					strongHits++;
+					break;
+				}
+			}
+		}
+		const skipAttribution = strongHits >= 5;
 
 		for (const slug of skillNames) {
 			// 会话去重：本会话已记录过则跳过
@@ -208,10 +234,11 @@ function track(pi: ExtensionAPI, ctx: any): string {
 			if (prev && prev.lastSession === shortName) continue;
 
 			// 强信号：定位技能文件路径第一次出现的 entry 位置（用于结果归因）
+			// 匹配带尾部斜杠/文件名，避免 slug 前缀误匹配（如 foo 匹配 skills/foobar）
 			let strongIndex = -1;
 			for (let i = 0; i < entries.length; i++) {
 				const t = entryText(entries[i]);
-				if (t.includes(`skills/${slug}/SKILL.md`) || t.includes(`skills/${slug}`)) {
+				if (t.includes(`skills/${slug}/SKILL.md`) || t.includes(`skills/${slug}/`)) {
 					strongIndex = i;
 					break;
 				}
@@ -229,8 +256,8 @@ function track(pi: ExtensionAPI, ctx: any): string {
 					outcomes: prev?.outcomes ?? { success: 0, failure: 0, unknown: 0 },
 					failReasons: prev?.failReasons ?? [],
 				};
-				// 结果归因：仅强信号技能（真读取了技能文件）
-				if (strong) {
+				// 结果归因：仅强信号技能（真读取了技能文件），且非审查/盘点类会话
+				if (strong && !skipAttribution) {
 					const { outcome, reasons } = judgeOutcome(entries, strongIndex);
 					entry.outcomes[outcome] = (entry.outcomes[outcome] ?? 0) + 1;
 					if (reasons.length) {

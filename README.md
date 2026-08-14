@@ -6,6 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue)](core/collect.py)
 [![Platforms](https://img.shields.io/badge/Platforms-Pi%20%7C%20Claude%20Code%20%7C%20Codex-green)](platforms/)
+[![更新日志](https://img.shields.io/badge/Changelog-更新日志-blue)](CHANGELOG.md)
 
 agent-self-evolution 借鉴 [Hermes Agent Self-Evolution](https://github.com/NousResearch/hermes-agent-self-evolution) 的设计哲学，为 AI 编码助手（pi / Claude Code / Codex）打造一套完整的「**经验 → 技能 → 进化**」学习闭环：
 
@@ -85,19 +86,19 @@ AI 编码助手是**无状态**的：一次任务中学到的经验，下次任�
 
 ## 支持平台
 
-| 平台 | 采集 | 进化流程 | 记忆注入 | 状态 |
-| --- | --- | --- | --- | --- |
-| **pi** (pi-coding-agent) | 扩展 `self-evolve.ts`（监听 `agent_settled`） | 技能 `self-evolve`（`/skill:self-evolve`） | 软链注入 / 文档引用 | ✅ 完整支持 |
-| **Claude Code** | `Stop` hook（读取 transcript） | `CLAUDE.md` 流程文档 | `@memory/USER.md` 引用 | ✅ 支持 |
-| **Codex** (OpenAI Codex CLI) | `Stop` hook（读取 session 轨迹） | `AGENTS.md` 流程文档 | `@memory/USER.md` 引用 | ✅ 支持 |
+| 平台 | 采集 | 使用统计 | 进化流程 | 记忆注入 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| **pi** (pi-coding-agent) | 扩展 `self-evolve.ts`（监听 `agent_settled`） | 扩展 `skill-usage.ts`（agent_settled） | 技能 `self-evolve`（`/skill:self-evolve`） | 软链注入 / 文档引用 | ✅ 完整支持 |
+| **Claude Code** | `Stop` hook（读取 transcript） | `core/track_usage.py`（hook 调用） | `CLAUDE.md` 流程文档 | `@memory/USER.md` 引用 | ✅ 支持 |
+| **Codex** (OpenAI Codex CLI) | `Stop` hook（读取 session 轨迹） | `core/track_usage.py`（hook 调用） | `AGENTS.md` 流程文档 | `@memory/USER.md` 引用 | ✅ 支持 |
 
 > **兼容性说明**：采集器核心（`core/collect.py`）与平台无关；各平台只负责「把轨迹归一化成统一 JSONL」+「注册 hook」。因此理论上任何「有 transcript、支持 hooks、能调 LLM」的 agent 都能接入。
 
 ### 各平台成熟度差异
 
-- **Pi**：最完整——采集使用 pi 自身的模型注册表，无需额外 API Key；技能启用走 pi 原生软链机制；进化流程可随时通过 `/skill:self-evolve` 触发。
-- **Claude Code**：采集走 `Stop` hook + `claude -p` headless 调用（复用登录态）；进化流程通过 `CLAUDE.md` 注入。
-- **Codex**：采集走 `Stop` hook + `codex exec`（复用登录态）；**注意** Codex 的 transcript 格式在不同版本间变化较大（v0.14x 起为 `response_item` 包裹结构），归一化脚本做了新旧格式兼容，但仍以你本机实测为准。
+- **Pi**：最完整——采集使用 pi 自身的模型注册表，无需额外 API Key；使用统计走 TS 扩展；技能启用走 pi 原生软链机制；进化流程可随时通过 `/skill:self-evolve` 触发。
+- **Claude Code**：采集走 `Stop` hook + `claude -p` headless 调用（复用登录态）；使用统计由 hook 调用 `core/track_usage.py`；进化流程通过 `CLAUDE.md` 注入。
+- **Codex**：采集走 `Stop` hook + `codex exec`（复用登录态）；使用统计同 Claude Code；**注意** Codex 的 transcript 格式在不同版本间变化较大（v0.14x 起为 `response_item` 包裹结构），归一化脚本做了新旧格式兼容，但仍以你本机实测为准。
 
 ---
 
@@ -148,7 +149,7 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 | `logs/archive/` | 按月归档的历史经验日志（主日志超限后自动归档） |
 | `state.json` | 系统状态：统计计数、上次进化/采集时间、拒绝原因 |
 | `usage.json` | 技能使用统计（强/弱信号 + 成功/失败/未知结果归因 + 失败原因） |
-| `core/` | 平台无关核心（collect.py / init.py / templates） |
+| `core/` | 平台无关核心（collect.py / track_usage.py / init.py / templates） |
 
 ### 候选（Candidate）
 
