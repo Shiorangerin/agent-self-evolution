@@ -189,4 +189,4 @@ case "$PLATFORM" in
 esac
 
 say "全部完成 🎉"
-say "下一步：跑一个多步骤任务 → 检查 $SE_ROOT/candidates/ 是否有候选 → 对 agent 说「总结一天的工作」触发进化"
+say "下一步：跑一个多步骤任务 → 检查 $SE_ROOT/candidates/ 是否有候选 → 对 agent 说「进化」触发审查流程"

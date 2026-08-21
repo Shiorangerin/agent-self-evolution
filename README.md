@@ -165,7 +165,7 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 
 进化流程对每个候选执行三步校验：
 
-1. **格式校验**：`name`（小写字母数字连字符）、`description`（≤1024 字符、写明何时使用）、SKILL.md ≤5000 字符；
+1. **格式校验**：`name`（小写字母数字连字符）、`description`（≤1024 字符、写明何时使用）、SKILL.md ≤8000 字符；
 2. **查重**：与已启用技能语义重复 → 并入或淘汰；
 3. **价值评估**：会重复出现吗？步骤可复用吗？有真实坑点吗？
 
@@ -202,6 +202,8 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 - **增量采集**：同一会话只分析上次采集点之后的新内容，长程对话不重复花钱；
 - **节流与上限**：全局节流可配置（默认关闭，因为增量采集不丢数据）、候选区堆积上限 20 个自动暂停；
 - 深度进化（候选审查、技能重构）只在**你手动触发**时发生。
+
+配套零 token 工具链：`scripts/candidate_preflight.py`（候选预检）、`scripts/skill_scorecard.py`（技能健康记分卡）、`scripts/healthcheck.sh`（一键体检）把一切机械判断从 LLM 挪到纯规则脚本。
 
 ### 4. 完全手动触发，你永远拥有控制权
 
@@ -396,7 +398,7 @@ A：1) 删除 hook 配置（Claude Code 的 settings.json 中的 Stop 条目 / C
 A：能。`SE_LLM_CMD` 可指定任意命令/模型；Pi 平台则用 pi 当前模型（可临时切换）。
 
 **Q：技能格式有要求吗？**
-A：frontmatter 要求 `name`（小写字母数字连字符）+ `description`（≤1024 字符，写明何时使用）；正文 ≤5000 字符。这是审查流程的硬性校验。
+A：frontmatter 要求 `name`（小写字母数字连字符）+ `description`（≤1024 字符，写明何时使用）；正文 ≤8000 字符。可用 `scripts/candidate_preflight.py` 零 token 预检。
 
 **Q：为什么不用自动定时进化？**
 A：刻意设计。自动唤醒会反复打断你、消耗 token、并可能在你不知情时改变 agent 行为。手动触发 = 完全控制。

@@ -5,8 +5,8 @@
 
 ## 触发方式（全部手动）
 
-- 用户说「总结一天的工作」或「总结今天的工作」：**先总结当天工作**（回顾当天会话轨迹 / 回顾对话上下文），再执行下方进化流程。
-- 用户说「进化」：直接执行进化流程，不做工作总结。
+- 用户说「进化」：执行下方完整进化流程。
+- 用户说「技能体检」：只运行 `scripts/skill_scorecard.py` 输出诊断报告（零写操作），不执行其他步骤。
 - 其他情况：不主动执行进化流程、不主动提示、不夹带任何相关操作。
 
 ## 进化流程（五步）
@@ -20,11 +20,12 @@
 
 对 `$SE_ROOT/candidates/` 下的**每一个**候选目录执行：
 
+0. 预检脚本（推荐先跑，零 token 机械检查）：`python3 <仓库>/scripts/candidate_preflight.py` 一键完成格式 / 大小 / 截断启发式 / 同名查重；硬伤须修复或淘汰。
 1. 读取 `SKILL.md` 与 `meta.md`（来源会话、工具调用次数、错误次数）。
 2. 格式校验：
    - frontmatter 含 `name`：小写字母 / 数字 / 连字符组成，1–64 字符；
    - frontmatter 含 `description`：≤1024 字符，写明「何时使用」；
-   - `SKILL.md` 正文（含 frontmatter）≤5000 字符。
+   - `SKILL.md` 正文（含 frontmatter）≤8000 字符。
    - 不达标 → 直接淘汰。
 3. 查重：与 `$SE_ROOT/skills/` 下已启用技能做语义比对；语义重复 → 并入已有技能或淘汰，**禁止重复启用**。
 4. 价值评估（至少满足一条才启用）：
@@ -39,15 +40,16 @@
 
 ### 第三步：技能体检（三线：闲置 / 问题 / 优质）
 
-1. 读取 `$SE_ROOT/usage.json`（由 hook 调用 `core/track_usage.py` 维护，纯规则零 LLM 成本）。
-2. **闲置技能**：列出 `lastUsedAt` 距今 ≥60 天未使用（含从未被记录过使用且启用已超 60 天的）的技能，逐一征求用户的归档决定；用户确认后归档：`mv $SE_ROOT/skills/<name> $SE_ROOT/archived/`，并从技能加载目录移除对应软链 / 文件；恢复时反向操作（移回并重建软链 / 文件）。
-3. **问题技能（健康度）**：读取每个技能的 `outcomes`（success/failure/unknown）与 `failReasons`，计算失败率 `failure/(success+failure)`，列出 **失败 ≥2 次，或失败率 >50% 且失败 ≥1 次** 的技能清单（附报错原文片段），逐一复核：
+1. 先跑记分卡自动分级：`python3 <仓库>/scripts/skill_scorecard.py` 产出 🌟优秀 ✅健康 ❓未观测 ⚠️问题 😴闲置 🛡️元技能 六档与归档候选清单。**元技能豁免**：`self-evolve` / `self-evolve-maintenance` 是流程定义本身，豁免闲置归档与自动压缩。
+2. 读取 `$SE_ROOT/usage.json`（由 hook 调用 `core/track_usage.py` 维护，纯规则零 LLM 成本）。
+3. **闲置技能**：列出 `lastUsedAt` 距今 ≥60 天未使用（含从未被记录过使用且启用已超 60 天的）的技能，逐一征求用户的归档决定；用户确认后归档：`mv $SE_ROOT/skills/<name> $SE_ROOT/archived/`，并从技能加载目录移除对应软链 / 文件；恢复时反向操作（移回并重建软链 / 文件）。
+4. **问题技能（健康度）**：读取每个技能的 `outcomes`（success/failure/unknown）与 `failReasons`，计算失败率 `failure/(success+failure)`，列出 **失败 ≥2 次，或失败率 >50% 且失败 ≥1 次** 的技能清单（附报错原文片段），逐一复核：
    - 失败原因属于技能未覆盖的坑 → 给该技能 SKILL.md 补「常见坑点」，`state.json` 的 `stats.skillsRepaired` +1
    - 技能内容与实际不符 → 重写对应步骤，同样记 `stats.skillsRepaired` +1
    - 屡败零胜（failure ≥3 且 success = 0）→ 建议淘汰，征求用户决定
    - 结果归因是启发式，可能误判：必要时回读该技能 `lastSession` 的原始轨迹确认
-4. **优质技能**：`success ≥3` 且失败率为 0 → 确认「表现良好」，不做任何操作
-5. 汇报时给出每个技能的使用次数与成功/失败/未知计数，让用户一眼看清谁好谁坏。
+5. **优质技能**：`success ≥3` 且失败率为 0 → 确认「表现良好」，不做任何操作
+6. 汇报时给出每个技能的使用次数与成功/失败/未知计数，让用户一眼看清谁好谁坏。
 
 ### 第四步：维护记忆
 
@@ -59,7 +61,8 @@
 
 1. 更新 `$SE_ROOT/state.json`：`lastEvolutionAt` 与 `stats` 中 `skillsEnabled` / `skillsUpdated` / `candidatesRejected` / `candidatesMerged` 等计数。
 2. 在 `$SE_ROOT/logs/experience-log.md` 追加一行总结（时间 / 来源 / 类型 / 摘要 / 去向）。
-3. 若 `$SE_ROOT` 位于 git 仓库中，提交本次变更（清晰 commit message）。
+3. 超长技能（>8000 字符）压缩走省 token 规范：低成本模型起草（保留全部坑点/命令/参数，只删冗余）+ 人工审 diff 落盘；>8K 或涉隐私边界先征求用户意见。
+4. 若 `$SE_ROOT` 位于 git 仓库中，提交本次变更（清晰 commit message）。
 
 ## 约束护栏
 

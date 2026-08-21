@@ -224,7 +224,10 @@ def track(transcript: str, session: str) -> str:
             if f"skills/{slug}/SKILL.md" in entry_text(e) or f"skills/{slug}/" in entry_text(e):
                 strong_hits += 1
                 break
-    skip_attribution = strong_hits >= ATTRIBUTION_SKIP_STRONG_HITS
+    # 盘点/审查类会话只是批量读取技能做体检，不代表任务使用：
+    # 计数、lastUsedAt、归因全部跳过，防止 count 膨胀与 lastUsedAt 污染
+    if strong_hits >= ATTRIBUTION_SKIP_STRONG_HITS:
+        return f"盘点/审查类会话（强信号 {strong_hits} 个技能被批量读取），跳过记录"
 
     hit = 0
     for slug in skill_names:
@@ -253,7 +256,7 @@ def track(transcript: str, session: str) -> str:
                 "failReasons": (prev.get("failReasons") if prev else None) or [],
             }
             # 结果归因：仅强信号技能（真读取了技能文件），且非审查/盘点类会话
-            if strong and not skip_attribution:
+            if strong:
                 outcome, reasons = judge_outcome(entries, strong_index)
                 entry["outcomes"][outcome] = entry["outcomes"].get(outcome, 0) + 1
                 if reasons:

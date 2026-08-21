@@ -54,6 +54,11 @@ MAX_CANDIDATES = int(os.environ.get("SE_MAX_CANDIDATES", "20"))  # 候选区堆�
 MAX_TRACE_CHARS = int(os.environ.get("SE_MAX_TRACE_CHARS", "2500"))
 MAX_OUTPUT_TOKENS = int(os.environ.get("SE_MAX_OUTPUT_TOKENS", "2000"))
 THROTTLE_MS = int(os.environ.get("SE_THROTTLE_MS", "0"))          # 默认关闭节流（增量采集不丢数据）
+MAX_SKILL_CHARS = int(os.environ.get("SE_MAX_SKILL_CHARS", "8000"))  # 草稿长度上限（放宽以容纳知识密集技能）
+
+# 自我管理会话熔断词表：进化流程执行期间的会话不值得自我沉淀（防自耗）
+SELF_MGMT_TRIGGERS = ["进化", "自我进化", "技能候选", "沉淀技能", "进化一下", "审查候选", "技能体检"]
+SELF_MGMT_PATHS = ["candidates", "skills/", "state.json", "usage.json", "experience-log"]
 
 # ---------------------------------------------------------------------------
 # 工具函数
@@ -151,6 +156,7 @@ def parse_transcript(path: str, offset: int = 0) -> tuple:
     user_parts, bash_parts, error_parts = [], [], []
     tool_calls = 0
     errors = 0
+    self_mgmt = False
     lines = []
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -172,6 +178,8 @@ def parse_transcript(path: str, offset: int = 0) -> tuple:
         if role == "user":
             if text and not text.startswith("/"):
                 user_parts.append(text[:300])
+                if any(w in text for w in SELF_MGMT_TRIGGERS):
+                    self_mgmt = True
         elif role == "assistant":
             tc = e.get("toolCall")
             if tc:
@@ -186,6 +194,8 @@ def parse_transcript(path: str, offset: int = 0) -> tuple:
                     p = str(args.get("path") or "")
                     if p:
                         bash_parts.append(f"{name} {p}")
+                        if any(m in p for m in SELF_MGMT_PATHS):
+                            self_mgmt = True
             if text:
                 bash_parts.append(text[:200])
         elif role == "toolResult":
@@ -196,6 +206,8 @@ def parse_transcript(path: str, offset: int = 0) -> tuple:
             cmd = e.get("command")
             if cmd and not e.get("cancelled"):
                 bash_parts.append(cmd[:200])
+                if any(m in cmd for m in SELF_MGMT_PATHS):
+                    self_mgmt = True
 
     lines_out = []
     if user_parts:
@@ -205,14 +217,20 @@ def parse_transcript(path: str, offset: int = 0) -> tuple:
     if error_parts:
         lines_out.append("【出现的错误】\n" + "\n---\n".join(error_parts[-3:]))
     summary = "\n\n".join(lines_out)[:MAX_TRACE_CHARS]
-    return len(lines), user_parts, tool_calls, errors, summary
+    return len(lines), user_parts, tool_calls, errors, summary, self_mgmt
 
 
 # ---------------------------------------------------------------------------
 # LLM 调用
 # ---------------------------------------------------------------------------
 
-def build_prompt(summary: str, tool_calls: int, errors: int) -> str:
+def build_prompt(summary: str, tool_calls: int, errors: int, prev_rejection: dict = None) -> str:
+    rejection_hint = []
+    if prev_rejection:
+        rejection_hint = [
+            f"【本会话历史判定】此会话的较早内容已被判定为不值得沉淀（原因：{prev_rejection.get('reason', '')}）。",
+            "仅当本次新增轨迹包含实质性的新可复用步骤/坑点时才生成候选；否则必须输出 SKIP:。",
+        ]
     skills_block = ""
     enabled = list_enabled_skills()
     if enabled:
@@ -231,10 +249,11 @@ def build_prompt(summary: str, tool_calls: int, errors: int) -> str:
         "",
         skills_block,
         "",
+        *rejection_hint,
         "输出格式（严格遵守，不要输出其他内容）：",
         "- 如果值得沉淀：直接输出完整 SKILL.md 全文，不要用代码块包裹，不要加任何解释。",
         "- frontmatter 必须以此开头：第一行 --- ，第二行必须是 name: <小写字母数字连字符>（不带引号，冒号后直接跟值），第三行 description: <中文，≤1024字符，写明『何时使用』>，最后一行 --- 结束。",
-        "- 正文用中文，包含适用场景、步骤流程、常见坑点与修复方法；总长 ≤ 5000 字符。",
+        f"- 正文用中文，包含适用场景、步骤流程、常见坑点与修复方法；总长 ≤ {MAX_SKILL_CHARS} 字符。",
         "- 如果不值得沉淀：只输出一行，以 SKIP: 开头并说明原因。",
         "- 如果与已启用技能清单中的技能语义重复：必须输出 SKIP: 与已有技能 <name> 重复（严禁重复生成）。",
         "",
@@ -323,7 +342,7 @@ def collect(transcript: str, session: str, offset: int = None,
 
     # 候选区堆积检查
     try:
-        candidate_count = len(list(CANDIDATES_DIR.iterdir())) if CANDIDATES_DIR.is_dir() else 0
+        candidate_count = len([d for d in CANDIDATES_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")]) if CANDIDATES_DIR.is_dir() else 0
     except Exception:
         candidate_count = 0
     if candidate_count >= MAX_CANDIDATES:
@@ -342,13 +361,21 @@ def collect(transcript: str, session: str, offset: int = None,
                 pass
 
     # 解析轨迹（未显式传参时）
+    self_mgmt = False
     if summary is None or tool_calls is None or errors is None:
-        offset, _, tc, er, sm = parse_transcript(transcript, offset)
+        offset, _, tc, er, sm, self_mgmt = parse_transcript(transcript, offset)
         tool_calls = tool_calls if tool_calls is not None else tc
         errors = errors if errors is not None else er
         summary = sm if summary is None else summary
     if not summary or not summary.strip():
         return "会话无可分析内容"
+
+    # 熔断：自我管理会话（正在执行进化流程本身）直接跳过，不发 LLM 防自耗
+    if self_mgmt and not force:
+        _advance(state, session, offset, transcript)
+        write_state(state)
+        append_log(f"| {now_local()} | {session} | 熔断 | 自我管理会话（执行进化流程本身），跳过采集不发 LLM | - |")
+        return "熔断：自我管理会话，跳过采集"
 
     state["stats"]["sessionsAnalyzed"] = state["stats"].get("sessionsAnalyzed", 0) + 1
 
@@ -358,8 +385,9 @@ def collect(transcript: str, session: str, offset: int = None,
         write_state(state)
         return f"条件不满足（工具调用 {tool_calls} 次、无错误），不值得调用 LLM"
 
-    # 草拟候选
-    prompt = build_prompt(summary, tool_calls, errors)
+    # 草拟候选（注入同会话拒绝记忆，抑制「先拒后生」的判断抖动）
+    prev_rej = (state.get("sessionRejections") or {}).get(session)
+    prompt = build_prompt(summary, tool_calls, errors, prev_rej)
     try:
         raw = call_llm(prompt)
     except Exception as e:
@@ -382,23 +410,7 @@ def collect(transcript: str, session: str, offset: int = None,
         append_log(f"| {now_local()} | {session} | 采集失败 | {reason} | - |")
         return f"❌ {reason}"
 
-    # SKIP 处理
-    if raw.startswith("SKIP:"):
-        reason = raw[5:].strip() or "未提供原因"
-        state["lastCollectionAt"] = now_iso()
-        state["stats"]["candidatesRejected"] = state["stats"].get("candidatesRejected", 0) + 1
-        record_rejection(state, session, reason)
-        _advance(state, session, offset, transcript)
-        write_state(state)
-        append_log(f"| {now_local()} | {session} | 拒绝沉淀 | {reason[:100]} | - |")
-        return f"拒绝沉淀: {reason}"
-
-    # 解析 name
-    raw_clean = re.sub(r"```(?:ya?ml|markdown)?\s*", "", raw).strip()
-    name_m = re.search(r"^name\s*:\s*[\"']?([^\"'\r\n]+)[\"']?\s*$", raw_clean, re.M)
-    name = name_m.group(1).strip() if name_m else ""
-    slug = slugify(name or "untitled-skill")
-
+    # 统一拒绝收尾（所有不写入候选的出口都走这里，保证 state 与日志一致）
     def reject(reason: str) -> str:
         state["stats"]["candidatesRejected"] = state["stats"].get("candidatesRejected", 0) + 1
         state["lastCollectionAt"] = now_iso()
@@ -408,6 +420,41 @@ def collect(transcript: str, session: str, offset: int = None,
         append_log(f"| {now_local()} | {session} | 拒绝沉淀 | {reason[:100]} | - |")
         return f"❌ {reason}"
 
+    # SKIP 判定必须在格式校验之前：SKIP 响应首行不是 ---，否则会被误判为格式错误。
+    # 同时记录同会话拒绝记忆，供后续增量采集注入提示词抑制判断抖动。
+    if raw.startswith("SKIP:"):
+        reason = raw[5:].strip() or "未提供原因"
+        rej_map = state.setdefault("sessionRejections", {})
+        rej_map[session] = {"at": now_iso(), "reason": reason[:200]}
+        reject(reason)
+        return f"拒绝沉淀: {reason}"
+
+    # 截断防护：CLI 后端无 stopReason 可查，用启发式拦截残缺草稿——
+    # ① 代码围栏不闭合（奇数个 ```）；② 尾部中断于标点。任一命中即丢弃，不入候选区。
+    if raw.count("```") % 2 == 1:
+        return reject("LLM 输出疑似截断（代码围栏不闭合），丢弃残缺草稿")
+    nonempty = [l.rstrip() for l in raw.splitlines() if l.strip()]
+    trunc_tails = ("→", "：", ":", "、", "，", "；", "-", "|", "*", "(", "（", "【", "《", "…")
+    ok_tails = ("。", "）", ")", "」", "】", "》", '"', "`")
+    if nonempty:
+        last = nonempty[-1]
+        if last.endswith(trunc_tails) and not last.endswith(ok_tails):
+            return reject(f"LLM 输出疑似截断（尾部中断于『{last[-12:]}』），丢弃残缺草稿")
+
+    # 清洗（供格式校验与 name 提取共用）：剥代码块包裹
+    raw_clean = re.sub(r"```(?:ya?ml|markdown)?\s*", "", raw).strip()
+
+    # 代码层质量校验（LLM 未遵守输出规则时的保险丝）
+    if raw_clean.split("\n", 1)[0].strip() != "---":
+        return reject("草稿缺少 frontmatter（首行非 ---，格式不符）")
+    if len(raw) > MAX_SKILL_CHARS:
+        return reject(f"草稿超长（{len(raw)} > {MAX_SKILL_CHARS} 字符，未遵守输出约束）")
+
+    # 解析 name
+    name_m = re.search(r"^name\s*:\s*[\"']?([^\"'\r\n]+)[\"']?\s*$", raw_clean, re.M)
+    name = name_m.group(1).strip() if name_m else ""
+    slug = slugify(name or "untitled-skill")
+
     if not name:
         return reject("LLM 草稿缺少合法 name（frontmatter 格式不符）")
 
@@ -415,9 +462,19 @@ def collect(transcript: str, session: str, offset: int = None,
     if any(s["name"] == slug for s in list_enabled_skills()):
         return reject(f"与已启用技能 {slug} 完全同名（查重拦截，LLM 未遵守查重规则）")
 
-    # 写入候选
+    # 写入候选（同名防覆盖：内容相同视为重复采集；不同则以 -N 变体落盘）
+    final_slug = slug
+    target = CANDIDATES_DIR / final_slug
+    if (target / "SKILL.md").exists():
+        existing = (target / "SKILL.md").read_text(encoding="utf-8")
+        if existing == raw:
+            return reject(f"与现有候选 {slug} 内容完全相同（重复采集）")
+        v = 2
+        while (CANDIDATES_DIR / f"{slug}-{v}" / "SKILL.md").exists():
+            v += 1
+        final_slug = f"{slug}-{v}"
+        target = CANDIDATES_DIR / final_slug
     try:
-        target = CANDIDATES_DIR / slug
         target.mkdir(parents=True, exist_ok=True)
         (target / "SKILL.md").write_text(raw, encoding="utf-8")
         (target / "meta.md").write_text(
@@ -434,12 +491,18 @@ def collect(transcript: str, session: str, offset: int = None,
     except Exception as e:
         return f"❌ 写入候选失败: {str(e)[:200]}"
 
+    # 候选已生成，清除本会话的拒绝记忆
+    if state.get("sessionRejections"):
+        state["sessionRejections"].pop(session, None)
+        if not state["sessionRejections"]:
+            state.pop("sessionRejections", None)
+
     state["stats"]["candidatesCreated"] = state["stats"].get("candidatesCreated", 0) + 1
     state["lastCollectionAt"] = now_iso()
     _advance(state, session, offset, transcript)
     write_state(state)
-    append_log(f"| {now_local()} | {session} | 候选生成 | 工具{tool_calls}次/错误{errors}次 → {slug} | candidates/{slug}/ |")
-    return f"🎉 已生成候选技能: {slug}（工具{tool_calls}次/错误{errors}次）"
+    append_log(f"| {now_local()} | {session} | 候选生成 | 工具{tool_calls}次/错误{errors}次 → {final_slug} | candidates/{final_slug}/ |")
+    return f"🎉 已生成候选技能: {final_slug}（工具{tool_calls}次/错误{errors}次）"
 
 
 def _advance(state: dict, session: str, offset: int, transcript: str) -> None:
