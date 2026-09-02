@@ -13,6 +13,27 @@ say()  { printf '\033[1;36m[install]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[警告]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[错误]\033[0m %s\n' "$*"; exit 1; }
 
+# ---------- platform docs ----------
+merge_platform_doc() {
+  local dst="$1"
+  local src="$2"
+  local detect="$3"
+  local marker="agent-self-evolution"
+  mkdir -p "$(dirname "$dst")"
+  touch "$dst"
+  if grep -Eq "BEGIN ${marker}|${detect}" "$dst"; then
+    say "平台说明已存在于 $(basename "$dst")，跳过"
+    return
+  fi
+  {
+    echo ''
+    echo "# BEGIN ${marker}"
+    sed "s|<仓库>|${REPO_DIR}|g" "$src"
+    echo "# END ${marker}"
+  } >> "$dst"
+  say "已合并平台说明到 $dst"
+}
+
 # ---------- 0. 环境检查 ----------
 command -v python3 >/dev/null 2>&1 || die "需要 python3（≥3.8），请先安装"
 
@@ -67,7 +88,7 @@ install_claude_code() {
   if [[ ! -f "$dst/CLAUDE.md" ]]; then
     cp "$REPO_DIR/platforms/claude-code/CLAUDE.md" "$dst/CLAUDE.md"
   else
-    warn "$dst/CLAUDE.md 已存在，跳过（请手动合并 platforms/claude-code/CLAUDE.md 的内容）"
+    merge_platform_doc "$dst/CLAUDE.md" "$REPO_DIR/platforms/claude-code/CLAUDE.md" '自我进化系统.*进化流程说明书'
   fi
   # 注册 Stop hook（若已有 settings.local.json 则优先使用它，避免与 settings.json 重复执行）
   local settings_file="$dst/settings.json"
@@ -178,7 +199,7 @@ PY
   if [[ ! -f "$dst/AGENTS.md" ]]; then
     cp "$REPO_DIR/platforms/codex/AGENTS.md" "$dst/AGENTS.md"
   else
-    warn "$dst/AGENTS.md 已存在，跳过（请手动合并 platforms/codex/AGENTS.md 的内容）"
+    merge_platform_doc "$dst/AGENTS.md" "$REPO_DIR/platforms/codex/AGENTS.md" 'agent-self-evolution.*Codex 平台进化流程'
   fi
   say "Codex 适配完成。首次运行 hooks 时 Codex 会要求 trust 确认，请允许。"
 }
