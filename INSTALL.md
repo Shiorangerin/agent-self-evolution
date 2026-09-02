@@ -21,7 +21,7 @@
 5. 完成后验证：
    - 确认 ~/.config/agent-self-evolution/ 目录已初始化（state.json、candidates/ 等存在）
    - 如果是 pi：确认 ~/.pi/agent/extensions/ 下有 self-evolve.ts 和 skill-usage.ts、~/.pi/agent/skills/self-evolve/ 存在
-   - 如果是 claude-code：确认 ~/.claude/settings.local.json（若存在）或 ~/.claude/settings.json 里有 Stop hook 配置、~/.claude/hooks/ 下有 collect.sh
+   - 如果是 claude-code：确认 ~/.claude/settings.local.json（若存在）或 ~/.claude/settings.json 里有 Stop hook 配置、~/.claude/hooks/agent-self-evolution/ 下有 collect.sh
    - 如果是 codex：确认 ~/.codex/config.toml 里有 [[hooks.Stop]] 和 [features] hooks = true
 6. 把安装结果和后续使用方式（对 agent 说「总结一天的工作」触发进化）简要报告给我
 ````
@@ -55,8 +55,8 @@ bash install.sh            # 交互式选择平台
 请帮我安装 agent-self-evolution 的 Claude Code 平台适配：
 1. 克隆 https://github.com/Shiorangerin/agent-self-evolution.git
 2. 运行 bash install.sh claude-code
-3. 验证 ~/.claude/settings.local.json（若存在）或 ~/.claude/settings.json 的 hooks.Stop 已注册（若 command 里是 ${CLAUDE_PROJECT_DIR} 占位符且我不用项目级配置，请改成绝对路径 ~/.claude/hooks/collect.sh）
-4. 检查 ~/.claude/hooks/ 下 collect.sh 与 normalize_claude.py 存在且可执行
+3. 验证 ~/.claude/settings.local.json（若存在）或 ~/.claude/settings.json 的 hooks.Stop 已注册，且 command 指向 ~/.claude/hooks/agent-self-evolution/collect.sh 的绝对路径
+4. 检查 ~/.claude/hooks/agent-self-evolution/ 下 collect.sh 与 normalize_claude.py 存在且可执行
 ````
 
 ### 只装 Codex
@@ -65,7 +65,7 @@ bash install.sh            # 交互式选择平台
 请帮我安装 agent-self-evolution 的 Codex 平台适配：
 1. 克隆 https://github.com/Shiorangerin/agent-self-evolution.git
 2. 运行 bash install.sh codex
-3. 验证 ~/.codex/config.toml 里有 [[hooks.Stop]] 和 [features] hooks = true、~/.codex/hooks/ 下文件存在
+3. 验证 ~/.codex/config.toml 里有 [[hooks.Stop]] 和 [features] hooks = true，并且 command 指向 $SE_ROOT/platforms/codex/hooks/collect.sh 的绝对路径
 4. 提醒我：Codex 首次运行 hooks 时可能要求 trust 确认，需要允许
 ````
 

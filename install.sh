@@ -28,7 +28,10 @@ merge_platform_doc() {
   {
     echo ''
     echo "# BEGIN ${marker}"
-    sed "s|<仓库>|${REPO_DIR}|g" "$src"
+    local repo_escaped="${REPO_DIR//\\/\\\\}"
+    repo_escaped="${repo_escaped//&/\\&}"
+    repo_escaped="${repo_escaped//|/\\|}"
+    sed "s|<仓库>|${repo_escaped}|g" "$src"
     echo "# END ${marker}"
   } >> "$dst"
   say "已合并平台说明到 $dst"
@@ -36,6 +39,8 @@ merge_platform_doc() {
 
 # ---------- 0. 环境检查 ----------
 command -v python3 >/dev/null 2>&1 || die "需要 python3（≥3.8），请先安装"
+mkdir -p "$SE_ROOT"
+SE_ROOT="$(cd "$SE_ROOT" && pwd)"
 
 # ---------- 1. 选择平台 ----------
 PLATFORM="${1:-}"
@@ -80,10 +85,11 @@ install_pi() {
 install_claude_code() {
   say "安装 Claude Code 适配…"
   local dst="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-  mkdir -p "$dst/hooks"
-  cp "$REPO_DIR/platforms/claude-code/hooks/collect.sh"          "$dst/hooks/collect.sh"
-  cp "$REPO_DIR/platforms/claude-code/hooks/normalize_claude.py" "$dst/hooks/normalize_claude.py"
-  chmod +x "$dst/hooks/collect.sh"
+  mkdir -p "$dst/hooks/agent-self-evolution"
+  dst="$(cd "$dst" && pwd)"
+  cp "$REPO_DIR/platforms/claude-code/hooks/collect.sh"          "$dst/hooks/agent-self-evolution/collect.sh"
+  cp "$REPO_DIR/platforms/claude-code/hooks/normalize_claude.py" "$dst/hooks/agent-self-evolution/normalize_claude.py"
+  chmod +x "$dst/hooks/agent-self-evolution/collect.sh"
   # CLAUDE.md（若不存在则复制，存在则提示）
   if [[ ! -f "$dst/CLAUDE.md" ]]; then
     cp "$REPO_DIR/platforms/claude-code/CLAUDE.md" "$dst/CLAUDE.md"
@@ -92,70 +98,13 @@ install_claude_code() {
   fi
   local settings_rc=0
   # 注册 Stop hook；统一检查两个用户级配置，避免 settings.json 和 settings.local.json 双注册。
-  python3 - "$dst" "$REPO_DIR/platforms/claude-code/settings.hooks.json" <<'PY' || settings_rc=$?
-import json
-import sys
-from pathlib import Path
-
-root = Path(sys.argv[1])
-template_path = Path(sys.argv[2])
-hook_abs = root / "hooks" / "collect.sh"
-local_path = root / "settings.local.json"
-settings_path = root / "settings.json"
-files = [local_path, settings_path]
-
-def has_collect_hook(data):
-    for group in data.get("hooks", {}).get("Stop", []):
-        for hook in group.get("hooks", []):
-            command = hook.get("command", "")
-            if hook.get("type") == "command" and "hooks/collect.sh" in command:
-                return True
-    return False
-
-loaded = []
-for path in files:
-    if not path.exists():
-        continue
-    try:
-        loaded.append((path, json.loads(path.read_text(encoding="utf-8"))))
-    except Exception as exc:
-        print(f"警告：无法解析 {path}: {exc}", file=sys.stderr)
-        sys.exit(2)
-
-if any(has_collect_hook(data) for _, data in loaded):
-    print("Stop hook 已存在，跳过")
-    sys.exit(0)
-
-if local_path.exists():
-    target = local_path
-else:
-    target = settings_path
-
-if target.exists():
-    settings = next(data for path, data in loaded if path == target)
-else:
-    settings = json.loads(template_path.read_text(encoding="utf-8"))
-
-for groups in settings.setdefault("hooks", {}).values():
-    for group in groups:
-        for hook in group.get("hooks", []):
-            if hook.get("command", "").startswith("bash ${CLAUDE_PROJECT_DIR}/.claude/hooks/collect.sh"):
-                hook["command"] = f"bash {hook_abs}"
-
-existing = settings.setdefault("hooks", {}).setdefault("Stop", [])
-template = json.loads(template_path.read_text(encoding="utf-8"))
-for group in template.get("hooks", {}).get("Stop", []):
-    existing.append(group)
-
-target.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-print(f"已注册 Stop hook 到 {target.name}")
-PY
+  python3 "$REPO_DIR/scripts/hook_config.py" claude "$dst" || settings_rc=$?
   if [[ "$settings_rc" -eq 2 ]]; then
     warn "Claude settings JSON 存在解析错误，已跳过自动注册；请手动检查后重试"
   elif [[ "$settings_rc" -ne 0 ]]; then
     warn "Claude Stop hook 注册失败，已保留现有配置"
   fi
-  say "Claude Code 适配完成。Stop hook 指向 $dst/hooks/collect.sh（项目级安装可自行改用 \${CLAUDE_PROJECT_DIR} 占位符）"
+  say "Claude Code 适配完成。Stop hook 指向 $dst/hooks/agent-self-evolution/collect.sh（项目级安装可自行改用 \${CLAUDE_PROJECT_DIR} 占位符）"
 }
 
 install_codex() {
@@ -167,83 +116,12 @@ install_codex() {
   cp "$REPO_DIR/platforms/codex/hooks/normalize_codex.py"  "$hooks_dst/normalize_codex.py"
   chmod +x "$hooks_dst/collect.sh"
   local dst="$HOME/.codex"
-  mkdir -p "$dst/hooks"
-  cp "$hooks_dst/collect.sh"          "$dst/hooks/collect.sh"
-  cp "$hooks_dst/normalize_codex.py"  "$dst/hooks/normalize_codex.py"
-  chmod +x "$dst/hooks/collect.sh"
+  mkdir -p "$dst"
+  dst="$(cd "$dst" && pwd)"
   local codex_rc=0
   # Codex 0.147+ 从 config.toml 读取 hooks；hooks.json 在该版本不会被加载。
   local cfg="$dst/config.toml"
-  python3 - "$cfg" "$hooks_dst/collect.sh" <<'PY' || codex_rc=$?
-import re
-import sys
-from pathlib import Path
-
-path, hook_abs = Path(sys.argv[1]), sys.argv[2]
-text = path.read_text(encoding="utf-8") if path.exists() else ""
-cmd = f"bash {hook_abs}"
-try:
-    import tomllib
-except ModuleNotFoundError:
-    tomllib = None
-
-def contains_hook(data):
-    hooks = data.get("hooks")
-    if not isinstance(hooks, dict):
-        return False
-    stop = hooks.get("Stop")
-    if not isinstance(stop, list):
-        return False
-    for group in stop:
-        if not isinstance(group, dict):
-            continue
-        for hook in group.get("hooks", []):
-            if isinstance(hook, dict) and "hooks/collect.sh" in hook.get("command", ""):
-                return True
-    return False
-
-if tomllib is not None and text.strip():
-    try:
-        data = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:
-        print(f"错误：无法解析 {path}: {exc}", file=sys.stderr)
-        sys.exit(1)
-    hooks = data.get("hooks")
-    if isinstance(hooks, dict) and "Stop" in hooks:
-        if isinstance(hooks["Stop"], dict):
-            print("检测到旧式 [hooks.Stop] 表；为避免 TOML 结构冲突，已跳过自动注册，请手动迁移", file=sys.stderr)
-            sys.exit(2)
-        if contains_hook(data):
-            print("Stop hook 已存在，跳过")
-            sys.exit(0)
-elif cmd in text:
-    print("Stop hook 已存在，跳过")
-    sys.exit(0)
-elif tomllib is None and re.search(r"(?m)^\s*\[(?:hooks\.Stop|\[hooks\.Stop\])\]\s*$", text):
-    print("检测到已有 hooks.Stop 配置；当前 Python 无 tomllib，已跳过自动注册，请手动迁移", file=sys.stderr)
-    sys.exit(2)
-elif tomllib is None and text.strip():
-    print("当前 Python 缺少 tomllib，无法安全校验已有 config.toml；已跳过自动注册，请使用 Python 3.11+ 或手动迁移", file=sys.stderr)
-    sys.exit(2)
-
-block = f"""
-
-[[hooks.Stop]]
-hooks = [
-  {{ type = "command", command = "{cmd}", async = false }}
-]
-"""
-new_text = text + block
-if tomllib is not None:
-    try:
-        tomllib.loads(new_text)
-    except tomllib.TOMLDecodeError as exc:
-        print(f"错误：追加 hook 后 {path} 无法解析，已放弃写入: {exc}", file=sys.stderr)
-        sys.exit(1)
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(new_text, encoding="utf-8")
-print("已在 config.toml 注册 Stop hook")
-PY
+  python3 "$REPO_DIR/scripts/hook_config.py" codex "$cfg" "$hooks_dst/collect.sh" || codex_rc=$?
   if [[ "$codex_rc" -eq 2 ]]; then
     warn "检测到旧式 hooks.Stop 配置，已保留原文件；请手动迁移后再运行安装"
   elif [[ "$codex_rc" -ne 0 ]]; then

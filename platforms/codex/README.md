@@ -19,7 +19,7 @@ platforms/codex/
 请帮我安装 agent-self-evolution 的 Codex 平台适配：
 1. git clone https://github.com/Shiorangerin/agent-self-evolution.git
 2. 运行 bash install.sh codex
-3. 验证 ~/.codex/config.toml 里有 [[hooks.Stop]] 与 [features] hooks = true、~/.codex/hooks/ 下文件存在
+3. 验证 ~/.codex/config.toml 里有 [[hooks.Stop]] 与 [features] hooks = true，并且 command 指向 $SE_ROOT/platforms/codex/hooks/collect.sh 的绝对路径
 4. 提醒我：Codex 首次运行 hooks 时可能要求 trust 确认，需要允许
 ````
 
@@ -46,12 +46,12 @@ Codex 0.147+ 只从 `~/.codex/config.toml` 读取 hooks，**不要继续依赖 `
 ```toml
 [[hooks.Stop]]
 hooks = [
-  { type = "command", command = "bash $HOME/.config/agent-self-evolution/platforms/codex/hooks/collect.sh", async = false }
+  { type = "command", command = "bash /absolute/path/to/SE_ROOT/platforms/codex/hooks/collect.sh", async = false }
 ]
 ```
 
 `type = "command"` 与 `async = false` 是 Codex 0.147 hook schema 的必填字段；`$HOME` 不会被 TOML 展开，
-请把命令路径改成不依赖变量展开的绝对路径。
+请把 `/absolute/path/to/SE_ROOT` 换成你的 `$SE_ROOT` 绝对路径。安装脚本会自动完成这一步。
 
 ### ③ 开启 hooks 功能开关
 

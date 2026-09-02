@@ -9,7 +9,7 @@ platforms/claude-code/
 ├── hooks/
 │   ├── normalize_claude.py   # Claude Code transcript → 统一 JSONL 归一化器
 │   └── collect.sh            # Stop hook 入口脚本（调用归一化器 + collect.py）
-├── settings.hooks.json       # hooks 配置片段（合并进 settings.local.json 或 settings.json）
+├── settings.hooks.json       # 项目级 hooks 配置片段；用户级安装会替换为绝对路径
 └── CLAUDE.md                 # 进化流程说明书（注入 Claude Code 上下文）
 ```
 
@@ -28,8 +28,8 @@ platforms/claude-code/
 请帮我安装 agent-self-evolution 的 Claude Code 平台适配：
 1. git clone https://github.com/Shiorangerin/agent-self-evolution.git
 2. 运行 bash install.sh claude-code（若 core 未初始化会自动处理）
-3. 验证 ~/.claude/settings.local.json（若存在）或 ~/.claude/settings.json 的 hooks.Stop 已注册；若 command 中是 ${CLAUDE_PROJECT_DIR} 占位符且我不用项目级配置，请改成绝对路径 ~/.claude/hooks/collect.sh
-4. 确认 ~/.claude/hooks/ 下 collect.sh 与 normalize_claude.py 存在且可执行
+3. 验证 ~/.claude/settings.local.json（若存在）或 ~/.claude/settings.json 的 hooks.Stop 已注册，且 command 指向 ~/.claude/hooks/agent-self-evolution/collect.sh 的绝对路径
+4. 确认 ~/.claude/hooks/agent-self-evolution/ 下 collect.sh 与 normalize_claude.py 存在且可执行
 ````
 
 以下详细步骤供 AI 执行时参考。
@@ -38,16 +38,16 @@ platforms/claude-code/
 
 ### 方式 A：项目级（仅当前项目生效）
 
-1. 复制 `hooks/` 下两个文件到项目 `.claude/hooks/`；
+1. 复制 `hooks/` 下两个文件到项目 `.claude/hooks/agent-self-evolution/`；
 2. 把 `settings.hooks.json` 中的 `hooks` 片段合并进项目 `.claude/settings.json`；
 3. 把 `CLAUDE.md` 放到项目根目录或 `.claude/CLAUDE.md`。
 
-> `settings.hooks.json` 中 `${CLAUDE_PROJECT_DIR}` 占位符仅在项目级有效，会自动展开为项目根目录。
+> `settings.hooks.json` 中 `${CLAUDE_PROJECT_DIR}` 占位符仅在项目级有效，会自动展开为项目根目录；脚本路径使用命名空间目录 `agent-self-evolution/`，避免覆盖用户同名 hook。
 
 ### 方式 B：用户级（所有项目生效）
 
-1. 复制 `hooks/` 下两个文件到 `~/.claude/hooks/`；
-2. 把 `settings.hooks.json` 中的 `hooks` 片段合并进 `~/.claude/settings.local.json`（若存在）或 `~/.claude/settings.json`，**并把 command 中的 `${CLAUDE_PROJECT_DIR}` 换成 `~/.claude/hooks/collect.sh` 的绝对路径**（用户级配置中该占位符不可用）；
+1. 复制 `hooks/` 下两个文件到 `~/.claude/hooks/agent-self-evolution/`；
+2. 把本系统 Stop hook 合并进 `~/.claude/settings.local.json`（若存在）或 `~/.claude/settings.json`，**command 必须使用 `~/.claude/hooks/agent-self-evolution/collect.sh` 的绝对路径**（用户级配置中 `${CLAUDE_PROJECT_DIR}` 占位符不可用）；
 3. 把 `CLAUDE.md` 放到 `~/.claude/CLAUDE.md`。
 
 ## 验证

@@ -30,7 +30,7 @@ cat ~/.config/agent-self-evolution/state.json   # 系统状态
 - 检查 JSON 语法：`python3 -m json.tool ~/.claude/settings.json`；
 - 检查 command 路径：用户级配置里 `${CLAUDE_PROJECT_DIR}` 占位符不生效，必须用绝对路径；
 - 检查 hook 是否被 permission 拦截：Claude Code 首次运行自定义 hook 可能要求确认；
-- 临时验证：手动执行 `echo '{"session_id":"t","transcript_path":"/path/to/transcript.jsonl"}' | bash ~/.claude/hooks/collect.sh`，看输出。
+- 临时验证：手动执行 `echo '{"session_id":"t","transcript_path":"/path/to/transcript.jsonl"}' | bash ~/.claude/hooks/agent-self-evolution/collect.sh`，看输出。
 
 ### Codex
 
