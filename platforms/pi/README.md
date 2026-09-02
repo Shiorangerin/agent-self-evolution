@@ -12,7 +12,7 @@ Pi 平台通过两个扩展 + 一个技能接入 agent-self-evolution：
 
 ````text
 请帮我安装 agent-self-evolution 的 Pi 平台适配：
-1. git clone https://github.com/R03montia/agent-self-evolution.git
+1. git clone https://github.com/Shiorangerin/agent-self-evolution.git
 2. 运行 bash install.sh pi（确认 ~/.pi/agent 存在，python3 可用）
 3. 验证 ~/.pi/agent/extensions/ 下有 self-evolve.ts、skill-usage.ts，~/.pi/agent/skills/self-evolve/ 存在
 4. 提醒我之后在 pi 里执行 /reload 让扩展生效

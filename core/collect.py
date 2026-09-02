@@ -272,14 +272,11 @@ def call_llm(prompt: str) -> str:
     # 1. 自定义命令
     custom = env.get("SE_LLM_CMD")
     if custom:
-        try:
-            cmd = custom.replace("{prompt}", prompt)
-            out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
-            if out.returncode == 0 and out.stdout.strip():
-                return out.stdout.strip()
-            errors.append(f"SE_LLM_CMD 退出码 {out.returncode}: {out.stderr[:200]}")
-        except Exception as e:
-            errors.append(f"SE_LLM_CMD 异常: {str(e)[:200]}")
+        cmd = custom.replace("{prompt}", prompt)
+        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+        raise RuntimeError(f"SE_LLM_CMD 失败，不再静默回退（退出码 {out.returncode}）: {out.stderr[:200]}")
 
     # 2. claude CLI
     if _which("claude"):

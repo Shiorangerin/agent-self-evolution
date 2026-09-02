@@ -111,7 +111,7 @@ AI 编码助手是**无状态**的：一次任务中学到的经验，下次任�
 ````text
 请帮我安装 agent-self-evolution（让 AI 助手自动沉淀技能与记忆的开源系统）：
 1. 检测环境（pi / claude / codex 装了哪些，python3 是否可用）
-2. git clone https://github.com/R03montia/agent-self-evolution.git
+2. git clone https://github.com/Shiorangerin/agent-self-evolution.git
 3. 按检测结果运行 bash install.sh pi / claude-code / codex / all
 4. 验证 ~/.config/agent-self-evolution/ 初始化完成，报告结果
 ````
@@ -119,7 +119,7 @@ AI 编码助手是**无状态**的：一次任务中学到的经验，下次任�
 手动安装：
 
 ```bash
-git clone https://github.com/R03montia/agent-self-evolution.git
+git clone https://github.com/Shiorangerin/agent-self-evolution.git
 cd agent-self-evolution
 bash install.sh        # 或 bash install.sh pi / claude-code / codex / all
 ```

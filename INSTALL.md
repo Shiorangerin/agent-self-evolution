@@ -11,7 +11,7 @@
 
 安装步骤：
 1. 检测本机环境：是否安装了 pi-coding-agent（~/.pi/agent 是否存在）、claude CLI、codex CLI；确认 python3 ≥ 3.8 可用
-2. 下载仓库到本地：git clone https://github.com/R03montia/agent-self-evolution.git（放到 ~/agent-self-evolution 或你觉得合适的位置）
+2. 下载仓库到本地：git clone https://github.com/Shiorangerin/agent-self-evolution.git（放到 ~/agent-self-evolution 或你觉得合适的位置）
 3. 根据检测结果选择平台并运行安装脚本（支持 pi / claude-code / codex / all 四个参数）：
    - 装了 pi → 运行 bash install.sh pi
    - 装了 claude → 运行 bash install.sh claude-code
@@ -29,7 +29,7 @@
 ## 手动安装（不依赖 AI）
 
 ```bash
-git clone https://github.com/R03montia/agent-self-evolution.git
+git clone https://github.com/Shiorangerin/agent-self-evolution.git
 cd agent-self-evolution
 bash install.sh            # 交互式选择平台
 # 或指定平台：bash install.sh pi / claude-code / codex / all
@@ -43,7 +43,7 @@ bash install.sh            # 交互式选择平台
 
 ````text
 请帮我安装 agent-self-evolution 的 Pi 平台适配：
-1. 克隆 https://github.com/R03montia/agent-self-evolution.git
+1. 克隆 https://github.com/Shiorangerin/agent-self-evolution.git
 2. 运行 bash install.sh pi（确认 ~/.pi/agent 存在，python3 可用）
 3. 验证 ~/.pi/agent/extensions/ 下有 self-evolve.ts、skill-usage.ts，~/.pi/agent/skills/self-evolve/ 存在
 4. 提醒我之后在 pi 里执行 /reload 让扩展生效
@@ -53,7 +53,7 @@ bash install.sh            # 交互式选择平台
 
 ````text
 请帮我安装 agent-self-evolution 的 Claude Code 平台适配：
-1. 克隆 https://github.com/R03montia/agent-self-evolution.git
+1. 克隆 https://github.com/Shiorangerin/agent-self-evolution.git
 2. 运行 bash install.sh claude-code
 3. 验证 ~/.claude/settings.local.json（若存在）或 ~/.claude/settings.json 的 hooks.Stop 已注册（若 command 里是 ${CLAUDE_PROJECT_DIR} 占位符且我不用项目级配置，请改成绝对路径 ~/.claude/hooks/collect.sh）
 4. 检查 ~/.claude/hooks/ 下 collect.sh 与 normalize_claude.py 存在且可执行
@@ -63,7 +63,7 @@ bash install.sh            # 交互式选择平台
 
 ````text
 请帮我安装 agent-self-evolution 的 Codex 平台适配：
-1. 克隆 https://github.com/R03montia/agent-self-evolution.git
+1. 克隆 https://github.com/Shiorangerin/agent-self-evolution.git
 2. 运行 bash install.sh codex
 3. 验证 ~/.codex/config.toml 里有 [[hooks.Stop]] 和 [features] hooks = true、~/.codex/hooks/ 下文件存在
 4. 提醒我：Codex 首次运行 hooks 时可能要求 trust 确认，需要允许

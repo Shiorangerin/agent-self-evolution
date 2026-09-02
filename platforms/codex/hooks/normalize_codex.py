@@ -95,9 +95,9 @@ def emit_tool_result(out, block):
     emit(out, role="toolResult", isError=bool(block.get("is_error")), text=text)
 
 
-def emit_call_output(out, payload):
+def emit_call_output(out, item):
     """兼容新式 function_call_output / custom_tool_call_output。"""
-    text = text_of(payload.get("output") or payload.get("content"))
+    text = text_of(item.get("output") or item.get("content"))
     if not text.strip():
         return
     emit(out, role="toolResult", isError=False, text=text)
@@ -130,9 +130,9 @@ def handle_new_message(payload, out):
         elif btype == "tool_result":
             emit_tool_result(out, block)
         elif btype == "function_call_output":
-            emit_call_output(out, payload)
+            emit_call_output(out, block)
         elif btype == "custom_tool_call_output":
-            emit_call_output(out, payload)
+            emit_call_output(out, block)
 
 
 def handle_new_payload(payload, out):

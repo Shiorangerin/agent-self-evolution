@@ -90,55 +90,72 @@ install_claude_code() {
   else
     merge_platform_doc "$dst/CLAUDE.md" "$REPO_DIR/platforms/claude-code/CLAUDE.md" '自我进化系统.*进化流程说明书'
   fi
-  # 注册 Stop hook（若已有 settings.local.json 则优先使用它，避免与 settings.json 重复执行）
-  local settings_file="$dst/settings.json"
-  if [[ -f "$dst/settings.local.json" ]]; then
-    settings_file="$dst/settings.local.json"
-  fi
-  if [[ -f "$settings_file" ]]; then
-    python3 - "$settings_file" "$REPO_DIR/platforms/claude-code/settings.hooks.json" "$dst/hooks/collect.sh" <<'PY'
-import json, sys
-settings_path, hooks_path, hook_abs = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(settings_path, "r", encoding="utf-8") as f:
-    settings = json.load(f)
-with open(hooks_path, "r", encoding="utf-8") as f:
-    hooks_block = json.load(f)
-settings.setdefault("hooks", {})
-merged = False
-for event, groups in hooks_block.get("hooks", {}).items():
-    existing = settings["hooks"].setdefault(event, [])
+  local settings_rc=0
+  # 注册 Stop hook；统一检查两个用户级配置，避免 settings.json 和 settings.local.json 双注册。
+  python3 - "$dst" "$REPO_DIR/platforms/claude-code/settings.hooks.json" <<'PY' || settings_rc=$?
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+template_path = Path(sys.argv[2])
+hook_abs = root / "hooks" / "collect.sh"
+local_path = root / "settings.local.json"
+settings_path = root / "settings.json"
+files = [local_path, settings_path]
+
+def has_collect_hook(data):
+    for group in data.get("hooks", {}).get("Stop", []):
+        for hook in group.get("hooks", []):
+            command = hook.get("command", "")
+            if hook.get("type") == "command" and "hooks/collect.sh" in command:
+                return True
+    return False
+
+loaded = []
+for path in files:
+    if not path.exists():
+        continue
+    try:
+        loaded.append((path, json.loads(path.read_text(encoding="utf-8"))))
+    except Exception as exc:
+        print(f"警告：无法解析 {path}: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+if any(has_collect_hook(data) for _, data in loaded):
+    print("Stop hook 已存在，跳过")
+    sys.exit(0)
+
+if local_path.exists():
+    target = local_path
+else:
+    target = settings_path
+
+if target.exists():
+    settings = next(data for path, data in loaded if path == target)
+else:
+    settings = json.loads(template_path.read_text(encoding="utf-8"))
+
+for groups in settings.setdefault("hooks", {}).values():
     for group in groups:
-        for h in group.get("hooks", []):
-            cmd = h.get("command", "")
-            if cmd.startswith("bash ${CLAUDE_PROJECT_DIR}/.claude/hooks/collect.sh"):
-                h["command"] = "bash " + hook_abs
-                cmd = h["command"]
-            if any(cmd in json.dumps(x) for x in existing):
-                continue
-            existing.append(group)
-            merged = True
-with open(settings_path, "w", encoding="utf-8") as f:
-    json.dump(settings, f, ensure_ascii=False, indent=2)
-print("已注册 Stop hook" if merged else "Stop hook 已存在，跳过")
+        for hook in group.get("hooks", []):
+            if hook.get("command", "").startswith("bash ${CLAUDE_PROJECT_DIR}/.claude/hooks/collect.sh"):
+                hook["command"] = f"bash {hook_abs}"
+
+existing = settings.setdefault("hooks", {}).setdefault("Stop", [])
+template = json.loads(template_path.read_text(encoding="utf-8"))
+for group in template.get("hooks", {}).get("Stop", []):
+    existing.append(group)
+
+target.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(f"已注册 Stop hook 到 {target.name}")
 PY
-  else
-    # 用户级 settings.json：command 必须用绝对路径（${CLAUDE_PROJECT_DIR} 占位符在此处不可靠）
-    python3 - "$REPO_DIR/platforms/claude-code/settings.hooks.json" "$dst/settings.json" "$dst/hooks/collect.sh" <<'PY'
-import json, sys
-src, dst, hook_abs = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(src, "r", encoding="utf-8") as f:
-    cfg = json.load(f)
-for groups in cfg.get("hooks", {}).values():
-    for group in groups:
-        for h in group.get("hooks", []):
-            if "command" in h:
-                h["command"] = "bash " + hook_abs
-with open(dst, "w", encoding="utf-8") as f:
-    json.dump(cfg, f, ensure_ascii=False, indent=2)
-PY
-    say "已创建 $settings_file（Stop hook 已指向绝对路径 $dst/hooks/collect.sh）"
+  if [[ "$settings_rc" -eq 2 ]]; then
+    warn "Claude settings JSON 存在解析错误，已跳过自动注册；请手动检查后重试"
+  elif [[ "$settings_rc" -ne 0 ]]; then
+    warn "Claude Stop hook 注册失败，已保留现有配置"
   fi
-  say "Claude Code 适配完成。$(basename "$settings_file") 中的 command 已指向 $dst/hooks/collect.sh（项目级安装可自行改用 \${CLAUDE_PROJECT_DIR} 占位符）"
+  say "Claude Code 适配完成。Stop hook 指向 $dst/hooks/collect.sh（项目级安装可自行改用 \${CLAUDE_PROJECT_DIR} 占位符）"
 }
 
 install_codex() {
@@ -154,46 +171,98 @@ install_codex() {
   cp "$hooks_dst/collect.sh"          "$dst/hooks/collect.sh"
   cp "$hooks_dst/normalize_codex.py"  "$dst/hooks/normalize_codex.py"
   chmod +x "$dst/hooks/collect.sh"
+  local codex_rc=0
   # Codex 0.147+ 从 config.toml 读取 hooks；hooks.json 在该版本不会被加载。
   local cfg="$dst/config.toml"
-  python3 - "$cfg" "$hooks_dst/collect.sh" <<'PY'
+  python3 - "$cfg" "$hooks_dst/collect.sh" <<'PY' || codex_rc=$?
+import re
 import sys
 from pathlib import Path
 
 path, hook_abs = Path(sys.argv[1]), sys.argv[2]
 text = path.read_text(encoding="utf-8") if path.exists() else ""
 cmd = f"bash {hook_abs}"
+try:
+    import tomllib
+except ModuleNotFoundError:
+    tomllib = None
 
-if cmd in text:
+def contains_hook(data):
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    stop = hooks.get("Stop")
+    if not isinstance(stop, list):
+        return False
+    for group in stop:
+        if not isinstance(group, dict):
+            continue
+        for hook in group.get("hooks", []):
+            if isinstance(hook, dict) and "hooks/collect.sh" in hook.get("command", ""):
+                return True
+    return False
+
+if tomllib is not None and text.strip():
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        print(f"错误：无法解析 {path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    hooks = data.get("hooks")
+    if isinstance(hooks, dict) and "Stop" in hooks:
+        if isinstance(hooks["Stop"], dict):
+            print("检测到旧式 [hooks.Stop] 表；为避免 TOML 结构冲突，已跳过自动注册，请手动迁移", file=sys.stderr)
+            sys.exit(2)
+        if contains_hook(data):
+            print("Stop hook 已存在，跳过")
+            sys.exit(0)
+elif cmd in text:
     print("Stop hook 已存在，跳过")
-else:
-    block = f"""
+    sys.exit(0)
+elif tomllib is None and re.search(r"(?m)^\s*\[(?:hooks\.Stop|\[hooks\.Stop\])\]\s*$", text):
+    print("检测到已有 hooks.Stop 配置；当前 Python 无 tomllib，已跳过自动注册，请手动迁移", file=sys.stderr)
+    sys.exit(2)
+elif tomllib is None and text.strip():
+    print("当前 Python 缺少 tomllib，无法安全校验已有 config.toml；已跳过自动注册，请使用 Python 3.11+ 或手动迁移", file=sys.stderr)
+    sys.exit(2)
+
+block = f"""
 
 [[hooks.Stop]]
 hooks = [
   {{ type = "command", command = "{cmd}", async = false }}
 ]
 """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(block)
-    print("已在 config.toml 注册 Stop hook")
+new_text = text + block
+if tomllib is not None:
+    try:
+        tomllib.loads(new_text)
+    except tomllib.TOMLDecodeError as exc:
+        print(f"错误：追加 hook 后 {path} 无法解析，已放弃写入: {exc}", file=sys.stderr)
+        sys.exit(1)
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(new_text, encoding="utf-8")
+print("已在 config.toml 注册 Stop hook")
 PY
+  if [[ "$codex_rc" -eq 2 ]]; then
+    warn "检测到旧式 hooks.Stop 配置，已保留原文件；请手动迁移后再运行安装"
+  elif [[ "$codex_rc" -ne 0 ]]; then
+    warn "Codex Stop hook 注册失败，已保留原配置"
+  fi
   # 开启当前 feature flag（0.147+ 使用 hooks；旧名 codex_hooks 已废弃）
   if command -v codex >/dev/null 2>&1; then
-    CODEX_HOME="$dst" codex features enable hooks >/dev/null
+    if CODEX_HOME="$dst" codex features enable hooks; then
+      say "已启用 Codex hooks feature"
+    else
+      warn "codex features enable hooks 失败，请手动在 $cfg 的 [features] 中加入 hooks = true"
+    fi
   else
     warn "未找到 codex CLI，请手动在 $cfg 的 [features] 中加入 hooks = true"
   fi
 
-  # 迁移旧安装遗留的 hooks.json；若其中含用户自定义 hook，则保留并提示迁移。
+  # Codex 0.147+ 不读取 hooks.json；保留文件，避免破坏用户自定义 hook。
   if [[ -f "$dst/hooks.json" ]]; then
-    if grep -q 'agent-self-evolution/platforms/codex/hooks/collect.sh' "$dst/hooks.json"; then
-      rm "$dst/hooks.json"
-      say "已移除旧版 $dst/hooks.json（Codex 0.147+ 不再读取该文件）"
-    else
-      warn "$dst/hooks.json 可能包含其他 hook，Codex 0.147+ 不会读取它，请手动迁移到 $cfg"
-    fi
+    warn "$dst/hooks.json 已保留；Codex 0.147+ 不会读取它，请手动核对并迁移其中仍需要的 hook"
   fi
   # AGENTS.md
   if [[ ! -f "$dst/AGENTS.md" ]]; then

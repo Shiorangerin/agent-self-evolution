@@ -17,7 +17,7 @@ platforms/codex/
 
 ````text
 请帮我安装 agent-self-evolution 的 Codex 平台适配：
-1. git clone https://github.com/R03montia/agent-self-evolution.git
+1. git clone https://github.com/Shiorangerin/agent-self-evolution.git
 2. 运行 bash install.sh codex
 3. 验证 ~/.codex/config.toml 里有 [[hooks.Stop]] 与 [features] hooks = true、~/.codex/hooks/ 下文件存在
 4. 提醒我：Codex 首次运行 hooks 时可能要求 trust 确认，需要允许
