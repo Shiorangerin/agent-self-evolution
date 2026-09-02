@@ -60,7 +60,7 @@ fi
 # 6b. 技能使用统计（纯规则，写 usage.json，供进化流程「技能体检」使用）
 TRACK_PY="${SE_ROOT}/core/track_usage.py"
 if [ -f "$TRACK_PY" ]; then
-    python3 "$TRACK_PY" --transcript "$norm_file" --session "$short" 2>/dev/null || true
+    python3 "$TRACK_PY" --transcript "$norm_file" --session "$short" >/dev/null 2>/dev/null || true
 fi
 
 # 7. 采集失败也绝不阻塞主 agent

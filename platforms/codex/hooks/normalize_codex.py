@@ -76,11 +76,13 @@ def tool_call_of(block):
     args = block.get("arguments")
     if args is None:
         args = block.get("args")
+    if args is None:
+        args = block.get("input")
     if isinstance(args, str):
         try:
             args = json.loads(args)  # arguments 可能是字符串 JSON
         except Exception:
-            pass  # 解析失败则原样保留字符串
+            args = {"input": args}  # 解析失败时包一层，避免下游把字符串当 dict
     if args is None:
         args = {}
     return {"name": name, "args": args}
@@ -91,6 +93,14 @@ def emit_tool_result(out, block):
     if not text.strip():
         return
     emit(out, role="toolResult", isError=bool(block.get("is_error")), text=text)
+
+
+def emit_call_output(out, item):
+    """兼容新式 function_call_output / custom_tool_call_output。"""
+    text = text_of(item.get("output") or item.get("content"))
+    if not text.strip():
+        return
+    emit(out, role="toolResult", isError=False, text=text)
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +129,10 @@ def handle_new_message(payload, out):
             emit(out, role="assistant", toolCall=tool_call_of(block))
         elif btype == "tool_result":
             emit_tool_result(out, block)
+        elif btype == "function_call_output":
+            emit_call_output(out, block)
+        elif btype == "custom_tool_call_output":
+            emit_call_output(out, block)
 
 
 def handle_new_payload(payload, out):
@@ -127,6 +141,8 @@ def handle_new_payload(payload, out):
         handle_new_message(payload, out)
     elif ptype in ("function_call", "custom_tool_call"):
         emit(out, role="assistant", toolCall=tool_call_of(payload))
+    elif ptype in ("function_call_output", "custom_tool_call_output"):
+        emit_call_output(out, payload)
     elif ptype == "tool_result":
         emit_tool_result(out, payload)
     else:
