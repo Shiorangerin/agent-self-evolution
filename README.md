@@ -1,4 +1,4 @@
-> 提醒: Claude Code与Codex适配部分未经任何验证，极大概率不可使用，推荐使用Pi Coding Agent。 
+> 提醒: Pi 平台支持最完整；Claude Code 与 Codex 适配（Stop hook 采集）已包含隔离测试验证，Codex 需 0.147+ 且首次运行需信任 hook。
 
 # agent-self-evolution
 
