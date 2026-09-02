@@ -1,3 +1,5 @@
+> 提醒: Claude Code与Codex适配部分未经任何验证，极大概率不可使用，推荐使用Pi Coding Agent。 
+
 # agent-self-evolution
 
 > **The agent that grows with you.**
