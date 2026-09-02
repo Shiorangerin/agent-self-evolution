@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # agent-self-evolution — Codex Stop hook 入口
 #
-# 由 Codex hooks（~/.codex/hooks.json 的 Stop 事件）在每次任务结束时调用。
+# 由 Codex hooks（~/.codex/config.toml 的 [[hooks.Stop]] 事件）在每次任务结束时调用。
 # stdin 收到事件 JSON（含 session_id / cwd / hook_event_name，部分版本含 transcript_path）：
 #
 #   1. 读取 stdin，提取 transcript_path / session_id / cwd
@@ -69,15 +69,20 @@ if ! python3 "$SCRIPT_DIR/normalize_codex.py" "$transcript" > "$tmp_out" 2>/dev/
 fi
 
 # 4. 增量采集（collect.py 自动处理 offset）
+#    Codex 0.147 的 Stop hook 会解析 stdout；默认静默，调试时可设置 SE_HOOK_VERBOSE=1
 if [ ! -f "$COLLECT_PY" ]; then
     exit 0
 fi
-python3 "$COLLECT_PY" --transcript "$tmp_out" --session "$short" 2>/dev/null || true
+if [ -n "${SE_HOOK_VERBOSE:-}" ]; then
+    python3 "$COLLECT_PY" --transcript "$tmp_out" --session "$short" 2>/dev/null || true
+else
+    python3 "$COLLECT_PY" --transcript "$tmp_out" --session "$short" >/dev/null 2>/dev/null || true
+fi
 
 # 4b. 技能使用统计（纯规则，写 usage.json，供进化流程「技能体检」使用）
 TRACK_PY="${SE_ROOT}/core/track_usage.py"
 if [ -f "$TRACK_PY" ]; then
-    python3 "$TRACK_PY" --transcript "$tmp_out" --session "$short" 2>/dev/null || true
+    python3 "$TRACK_PY" --transcript "$tmp_out" --session "$short" >/dev/null 2>/dev/null || true
 fi
 
 # 5. 采集失败绝不阻塞 agent

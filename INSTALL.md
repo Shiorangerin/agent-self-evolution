@@ -11,7 +11,7 @@
 
 安装步骤：
 1. 检测本机环境：是否安装了 pi-coding-agent（~/.pi/agent 是否存在）、claude CLI、codex CLI；确认 python3 ≥ 3.8 可用
-2. 下载仓库到本地：git clone https://github.com/Shiorangerin/agent-self-evolution.git（放到 ~/agent-self-evolution 或你觉得合适的位置）
+2. 下载仓库到本地：git clone https://github.com/R03montia/agent-self-evolution.git（放到 ~/agent-self-evolution 或你觉得合适的位置）
 3. 根据检测结果选择平台并运行安装脚本（支持 pi / claude-code / codex / all 四个参数）：
    - 装了 pi → 运行 bash install.sh pi
    - 装了 claude → 运行 bash install.sh claude-code
@@ -21,15 +21,15 @@
 5. 完成后验证：
    - 确认 ~/.config/agent-self-evolution/ 目录已初始化（state.json、candidates/ 等存在）
    - 如果是 pi：确认 ~/.pi/agent/extensions/ 下有 self-evolve.ts 和 skill-usage.ts、~/.pi/agent/skills/self-evolve/ 存在
-   - 如果是 claude-code：确认 ~/.claude/settings.json 里有 Stop hook 配置、~/.claude/hooks/ 下有 collect.sh
-   - 如果是 codex：确认 ~/.codex/hooks.json 存在、config.toml 里有 [features] codex_hooks = true
+   - 如果是 claude-code：确认 ~/.claude/settings.local.json（若存在）或 ~/.claude/settings.json 里有 Stop hook 配置、~/.claude/hooks/ 下有 collect.sh
+   - 如果是 codex：确认 ~/.codex/config.toml 里有 [[hooks.Stop]] 和 [features] hooks = true
 6. 把安装结果和后续使用方式（对 agent 说「总结一天的工作」触发进化）简要报告给我
 ````
 
 ## 手动安装（不依赖 AI）
 
 ```bash
-git clone https://github.com/Shiorangerin/agent-self-evolution.git
+git clone https://github.com/R03montia/agent-self-evolution.git
 cd agent-self-evolution
 bash install.sh            # 交互式选择平台
 # 或指定平台：bash install.sh pi / claude-code / codex / all
@@ -43,7 +43,7 @@ bash install.sh            # 交互式选择平台
 
 ````text
 请帮我安装 agent-self-evolution 的 Pi 平台适配：
-1. 克隆 https://github.com/Shiorangerin/agent-self-evolution.git
+1. 克隆 https://github.com/R03montia/agent-self-evolution.git
 2. 运行 bash install.sh pi（确认 ~/.pi/agent 存在，python3 可用）
 3. 验证 ~/.pi/agent/extensions/ 下有 self-evolve.ts、skill-usage.ts，~/.pi/agent/skills/self-evolve/ 存在
 4. 提醒我之后在 pi 里执行 /reload 让扩展生效
@@ -53,9 +53,9 @@ bash install.sh            # 交互式选择平台
 
 ````text
 请帮我安装 agent-self-evolution 的 Claude Code 平台适配：
-1. 克隆 https://github.com/Shiorangerin/agent-self-evolution.git
+1. 克隆 https://github.com/R03montia/agent-self-evolution.git
 2. 运行 bash install.sh claude-code
-3. 验证 ~/.claude/settings.json 的 hooks.Stop 已注册（若 command 里是 ${CLAUDE_PROJECT_DIR} 占位符且我不用项目级配置，请改成绝对路径 ~/.claude/hooks/collect.sh）
+3. 验证 ~/.claude/settings.local.json（若存在）或 ~/.claude/settings.json 的 hooks.Stop 已注册（若 command 里是 ${CLAUDE_PROJECT_DIR} 占位符且我不用项目级配置，请改成绝对路径 ~/.claude/hooks/collect.sh）
 4. 检查 ~/.claude/hooks/ 下 collect.sh 与 normalize_claude.py 存在且可执行
 ````
 
@@ -63,9 +63,9 @@ bash install.sh            # 交互式选择平台
 
 ````text
 请帮我安装 agent-self-evolution 的 Codex 平台适配：
-1. 克隆 https://github.com/Shiorangerin/agent-self-evolution.git
+1. 克隆 https://github.com/R03montia/agent-self-evolution.git
 2. 运行 bash install.sh codex
-3. 验证 ~/.codex/hooks.json 存在且合法、~/.codex/config.toml 有 [features] codex_hooks = true、~/.codex/hooks/ 下文件存在
+3. 验证 ~/.codex/config.toml 里有 [[hooks.Stop]] 和 [features] hooks = true、~/.codex/hooks/ 下文件存在
 4. 提醒我：Codex 首次运行 hooks 时可能要求 trust 确认，需要允许
 ````
 
@@ -82,12 +82,12 @@ bash install.sh            # 交互式选择平台
 | 数据目录 | `ls ~/.config/agent-self-evolution/` | candidates/ skills/ memory/ logs/ state.json 存在 |
 | 采集器可运行 | `python3 ~/.config/agent-self-evolution/core/collect.py --help` | 打印帮助 |
 | Pi 扩展 | `ls ~/.pi/agent/extensions/` | 含 self-evolve.ts、skill-usage.ts |
-| Claude Code hook | `python3 -m json.tool ~/.claude/settings.json` | hooks.Stop 存在 |
-| Codex hook | `cat ~/.codex/hooks.json` | Stop 命令存在 |
+| Claude Code hook | `python3 -m json.tool ~/.claude/settings.local.json`（若不存在则检查 `settings.json`） | hooks.Stop 存在 |
+| Codex hook | `grep -A4 'hooks.Stop' ~/.codex/config.toml` | type/command/async 齐全 |
 
 ## 卸载
 
-1. 删除 hook 配置：Claude Code 的 `~/.claude/settings.json` 中 hooks.Stop 条目；Codex 的 `~/.codex/hooks.json`；
+1. 删除 hook 配置：Claude Code 的 `~/.claude/settings.local.json`（若不存在则 `settings.json`）中 hooks.Stop 条目；Codex 的 `~/.codex/config.toml` 中 [[hooks.Stop]] 条目；
 2. 删除 Pi 扩展：`~/.pi/agent/extensions/self-evolve.ts`、`skill-usage.ts` 与 `~/.pi/agent/skills/self-evolve/`；
 3. 删除数据目录：`rm -rf ~/.config/agent-self-evolution/`；
 4. 删除克隆的仓库目录。

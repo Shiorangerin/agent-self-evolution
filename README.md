@@ -92,7 +92,7 @@ AI 编码助手是**无状态**的：一次任务中学到的经验，下次任�
 | --- | --- | --- | --- | --- | --- |
 | **pi** (pi-coding-agent) | 扩展 `self-evolve.ts`（监听 `agent_settled`） | 扩展 `skill-usage.ts`（agent_settled） | 技能 `self-evolve`（`/skill:self-evolve`） | 软链注入 / 文档引用 | ✅ 完整支持 |
 | **Claude Code** | `Stop` hook（读取 transcript） | `core/track_usage.py`（hook 调用） | `CLAUDE.md` 流程文档 | `@memory/USER.md` 引用 | ✅ 支持 |
-| **Codex** (OpenAI Codex CLI) | `Stop` hook（读取 session 轨迹） | `core/track_usage.py`（hook 调用） | `AGENTS.md` 流程文档 | `@memory/USER.md` 引用 | ✅ 支持 |
+| **Codex** (OpenAI Codex CLI) | `config.toml` `[[hooks.Stop]]`（读取 session 轨迹） | `core/track_usage.py`（hook 调用） | `AGENTS.md` 流程文档 | `@memory/USER.md` 引用 | ✅ 支持 |
 
 > **兼容性说明**：采集器核心（`core/collect.py`）与平台无关；各平台只负责「把轨迹归一化成统一 JSONL」+「注册 hook」。因此理论上任何「有 transcript、支持 hooks、能调 LLM」的 agent 都能接入。
 
@@ -111,7 +111,7 @@ AI 编码助手是**无状态**的：一次任务中学到的经验，下次任�
 ````text
 请帮我安装 agent-self-evolution（让 AI 助手自动沉淀技能与记忆的开源系统）：
 1. 检测环境（pi / claude / codex 装了哪些，python3 是否可用）
-2. git clone https://github.com/Shiorangerin/agent-self-evolution.git
+2. git clone https://github.com/R03montia/agent-self-evolution.git
 3. 按检测结果运行 bash install.sh pi / claude-code / codex / all
 4. 验证 ~/.config/agent-self-evolution/ 初始化完成，报告结果
 ````
@@ -119,7 +119,7 @@ AI 编码助手是**无状态**的：一次任务中学到的经验，下次任�
 手动安装：
 
 ```bash
-git clone https://github.com/Shiorangerin/agent-self-evolution.git
+git clone https://github.com/R03montia/agent-self-evolution.git
 cd agent-self-evolution
 bash install.sh        # 或 bash install.sh pi / claude-code / codex / all
 ```
@@ -394,7 +394,7 @@ A：临时方案：把 `SE_MIN_TOOL_CALLS` 调高；彻底方案：删除该平�
 A：在。数据目录是共享的，Pi / Claude Code / Codex 读同一份 `$SE_ROOT`。
 
 **Q：如何完全卸载？**
-A：1) 删除 hook 配置（Claude Code 的 settings.json 中的 Stop 条目 / Codex 的 hooks.json）；2) 删除 Pi 扩展文件；3) 删除 `$SE_ROOT` 目录。不残留任何后台进程。
+A：1) 删除 hook 配置（Claude Code 的 settings.local.json/settings.json 中的 Stop 条目 / Codex config.toml 的 [[hooks.Stop]]）；2) 删除 Pi 扩展文件；3) 删除 `$SE_ROOT` 目录。不残留任何后台进程。
 
 **Q：采集用的模型能单独指定吗？**
 A：能。`SE_LLM_CMD` 可指定任意命令/模型；Pi 平台则用 pi 当前模型（可临时切换）。

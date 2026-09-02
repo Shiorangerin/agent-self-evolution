@@ -9,7 +9,7 @@ platforms/claude-code/
 ├── hooks/
 │   ├── normalize_claude.py   # Claude Code transcript → 统一 JSONL 归一化器
 │   └── collect.sh            # Stop hook 入口脚本（调用归一化器 + collect.py）
-├── settings.hooks.json       # hooks 配置片段（合并进 settings.json）
+├── settings.hooks.json       # hooks 配置片段（合并进 settings.local.json 或 settings.json）
 └── CLAUDE.md                 # 进化流程说明书（注入 Claude Code 上下文）
 ```
 
@@ -26,9 +26,9 @@ platforms/claude-code/
 
 ````text
 请帮我安装 agent-self-evolution 的 Claude Code 平台适配：
-1. git clone https://github.com/Shiorangerin/agent-self-evolution.git
+1. git clone https://github.com/R03montia/agent-self-evolution.git
 2. 运行 bash install.sh claude-code（若 core 未初始化会自动处理）
-3. 验证 ~/.claude/settings.json 的 hooks.Stop 已注册；若 command 中是 ${CLAUDE_PROJECT_DIR} 占位符且我不用项目级配置，请改成绝对路径 ~/.claude/hooks/collect.sh
+3. 验证 ~/.claude/settings.local.json（若存在）或 ~/.claude/settings.json 的 hooks.Stop 已注册；若 command 中是 ${CLAUDE_PROJECT_DIR} 占位符且我不用项目级配置，请改成绝对路径 ~/.claude/hooks/collect.sh
 4. 确认 ~/.claude/hooks/ 下 collect.sh 与 normalize_claude.py 存在且可执行
 ````
 
@@ -47,7 +47,7 @@ platforms/claude-code/
 ### 方式 B：用户级（所有项目生效）
 
 1. 复制 `hooks/` 下两个文件到 `~/.claude/hooks/`；
-2. 把 `settings.hooks.json` 中的 `hooks` 片段合并进 `~/.claude/settings.json`，**并把 command 中的 `${CLAUDE_PROJECT_DIR}` 换成 `~/.claude/hooks/collect.sh` 的绝对路径**（用户级配置中该占位符不可用）；
+2. 把 `settings.hooks.json` 中的 `hooks` 片段合并进 `~/.claude/settings.local.json`（若存在）或 `~/.claude/settings.json`，**并把 command 中的 `${CLAUDE_PROJECT_DIR}` 换成 `~/.claude/hooks/collect.sh` 的绝对路径**（用户级配置中该占位符不可用）；
 3. 把 `CLAUDE.md` 放到 `~/.claude/CLAUDE.md`。
 
 ## 验证
@@ -67,7 +67,7 @@ platforms/claude-code/
 
 | 现象 | 可能原因 | 处理 |
 | --- | --- | --- |
-| hook 不触发 | settings.json 语法错误或位置不对（项目级应在 `.claude/settings.json`，用户级应在 `~/.claude/settings.json`）；hooks 片段未正确合并 | 用 `claude doctor` 或手动检查 JSON 合法性，确认 `Stop` 事件与 command 写法 |
+| hook 不触发 | settings 语法错误或位置不对（项目级应在 `.claude/settings.json`，用户级应在 `~/.claude/settings.local.json` 或 `~/.claude/settings.json`）；hooks 片段未正确合并 | 用 `claude doctor` 或手动检查 JSON 合法性，确认 `Stop` 事件与 command 写法 |
 | stdin 无 transcript_path | 事件字段缺失 / hook 版本差异 | 手动测试确认 stdin 含 `transcript_path` 字段；collect.sh 对空值会静默退出，属预期行为 |
 | 无候选生成 | 工具调用次数不足（默认阈值 5 次，`SE_MIN_TOOL_CALLS` 可调）；LLM 后端缺失 | 检查 `$SE_ROOT/logs/experience-log.md` 中的采集失败记录；按上文「前置条件」配置任一 LLM 后端 |
 

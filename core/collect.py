@@ -186,7 +186,7 @@ def parse_transcript(path: str, offset: int = 0) -> tuple:
                 tool_calls += 1
                 name = (tc.get("name") or "").lower()  # 平台工具名大小写不一（Bash/bash），统一小写匹配
                 args = tc.get("args") or {}
-                if name in ("bash", "bash_command", "command"):
+                if name in ("bash", "bash_command", "command", "exec_command"):
                     cmd = str(args.get("command") or args.get("cmd") or "")
                     if cmd:
                         bash_parts.append(cmd[:200])
@@ -265,37 +265,47 @@ def build_prompt(summary: str, tool_calls: int, errors: int, prev_rejection: dic
 
 
 def call_llm(prompt: str) -> str:
-    """按优先级调用 LLM 后端，返回原始输出文本。"""
+    """按优先级依次尝试 LLM 后端，返回原始输出文本。"""
     env = os.environ
+    errors = []
 
     # 1. 自定义命令
     custom = env.get("SE_LLM_CMD")
     if custom:
-        cmd = custom.replace("{prompt}", prompt)
-        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
-        if out.returncode == 0:
-            return out.stdout.strip()
-        raise RuntimeError(f"SE_LLM_CMD 退出码 {out.returncode}: {out.stderr[:200]}")
+        try:
+            cmd = custom.replace("{prompt}", prompt)
+            out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip()
+            errors.append(f"SE_LLM_CMD 退出码 {out.returncode}: {out.stderr[:200]}")
+        except Exception as e:
+            errors.append(f"SE_LLM_CMD 异常: {str(e)[:200]}")
 
     # 2. claude CLI
     if _which("claude"):
-        out = subprocess.run(
-            ["claude", "-p", prompt, "--output-format", "text"],
-            capture_output=True, text=True, timeout=600,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            return out.stdout.strip()
-        raise RuntimeError(f"claude CLI 失败（{out.returncode}）: {out.stderr[:200]}")
+        try:
+            out = subprocess.run(
+                ["claude", "-p", prompt, "--output-format", "text"],
+                capture_output=True, text=True, timeout=600,
+            )
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip()
+            errors.append(f"claude CLI 失败（{out.returncode}）: {out.stderr[:200]}")
+        except Exception as e:
+            errors.append(f"claude CLI 异常: {str(e)[:200]}")
 
     # 3. codex CLI（prompt 用 `-` 从 stdin 读，避免多行参数问题）
     if _which("codex"):
-        out = subprocess.run(
-            ["codex", "exec", "--full-auto", "-C", str(Path.cwd()), "-"],
-            input=prompt, capture_output=True, text=True, timeout=600,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            return out.stdout.strip()
-        raise RuntimeError(f"codex CLI 失败（{out.returncode}）: {out.stderr[:200]}")
+        try:
+            out = subprocess.run(
+                ["codex", "exec", "--full-auto", "-C", str(Path.cwd()), "-"],
+                input=prompt, capture_output=True, text=True, timeout=600,
+            )
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip()
+            errors.append(f"codex CLI 失败（{out.returncode}）: {out.stderr[:200]}")
+        except Exception as e:
+            errors.append(f"codex CLI 异常: {str(e)[:200]}")
 
     # 4. OpenAI 兼容 API
     api_base = env.get("SE_API_BASE")
@@ -317,7 +327,7 @@ def call_llm(prompt: str) -> str:
             data = json.loads(resp.read().decode("utf-8"))
         return (data["choices"][0]["message"]["content"] or "").strip()
 
-    raise RuntimeError(
+    raise RuntimeError("; ".join(errors) or
         "未找到可用的 LLM 后端：请设置 SE_LLM_CMD，或安装 claude/codex CLI，或配置 SE_API_BASE/SE_API_KEY/SE_API_MODEL"
     )
 
