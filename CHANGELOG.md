@@ -17,7 +17,10 @@
 - state.json 模板新增画像计数（profilesCollected / profilesRejected / profilesFailed）；数据目录新增 `profiles/`；新增 config.json 模板。
 
 ### 修复
-- Pi 扩展数据目录硬编码 `~/.pi/agent/evolution`，与 README/init.py 的默认 `~/.config/agent-self-evolution` 不一致（SE_ROOT 被忽略、双扩展与 Python 侧统计口径分裂）；改为统一尊重 `SE_ROOT` 环境变量并回退到 README 默认值（self-evolve.ts / skill-usage.ts 同步修复）。
+- Pi 扩展数据目录硬编码 `~/.pi/agent/evolution`，与 README/init.py 的默认 `~/.config/agent-self-evolution` 不一致（SE_ROOT 被忽略、双扩展与 Python 侧统计口径分裂）；改为统一尊重 `SE_ROOT` 环境变量并回退到 README 默认值（self-evolve.ts / skill-usage.ts 同步修复）；install.sh 对老目录给出手动合并提示（`cp -rn` 不覆盖）。
+- 审查补丁（P0）：`core/collect.py` 画像与技能采集各持一份 `state` 先后写盘，后写覆盖先写导致 `sessionsAnalyzed` / `profilesCollected` 二选一丢失；改为共用同一 `state` 对象（与 Pi 侧对齐），双路成功时计数不再互踩。
+- 审查补丁：Python 隐私熔断只查截断后摘要（默认 2500 字符），后文私密路径可能漏网；现摘要 + 轨迹新增段原文双保险（与 Pi 侧 `summary + buildTraceText(window)` 全量检查对齐）。
+- 审查补丁：Python 无后端报错 hint 误带 Pi 专用的 `models` 字段，已删去；AI 代装提示块改为展开真实 config 路径；README 成本段修正为“最多两次调用”，并注明 `diary` 宽匹配下日记类会话默认不采集。
 
 ### 测试
 - evolution-core 单元测试新增脱敏 / 隐私模式 / hasUser 用例（23 → 31 个）。

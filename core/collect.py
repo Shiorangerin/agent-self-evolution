@@ -393,7 +393,7 @@ def call_llm(prompt: str, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
     backend_hint = f"（backend={backend}）" if backend != "auto" else ""
     raise RuntimeError(
         f"未找到可用的 LLM 后端{backend_hint}：请在 $SE_ROOT/config.json 的 collector 段指定便宜/免费的采集模型"
-        f"（backend / llmCmd / apiBase+apiKey+apiModel / models），或设置 SE_LLM_CMD / SE_API_* 环境变量，或安装 claude/codex CLI"
+        f"（backend / llmCmd / apiBase+apiKey+apiModel），或设置 SE_LLM_CMD / SE_API_* 环境变量，或安装 claude/codex CLI"
     )
 
 
@@ -467,7 +467,8 @@ def collect(transcript: str, session: str, offset: int = None,
 
     # 隐私熔断：轨迹命中隐私路径模式 → 整场跳过采集（内容不外发给任何 LLM，宁可误杀不可放过）。
     # 无条件生效：force 只绕过节流与 busy，不绕过隐私熔断。
-    if touches_private(summary):
+    # 双保险：摘要（截断后）+ 轨迹新增段原文（防截断漏网，与 Pi 侧全量检查对齐）。
+    if touches_private(summary) or _transcript_touches_private(transcript, offset):
         _advance(state, session, offset, transcript)
         write_state(state)
         append_log(f"| {now_local()} | {session} | 熔断 | 轨迹命中隐私路径模式，跳过采集 | - |")
@@ -601,16 +602,28 @@ def collect(transcript: str, session: str, offset: int = None,
         append_log(f"| {now_local()} | {session} | 候选生成 | 工具{tool_calls}次/错误{errors}次 → {final_slug} | candidates/{final_slug}/ |")
         return f"🎉 已生成候选技能: {final_slug}（工具{tool_calls}次/错误{errors}次）"
 
-    # 用户画像采集：与技能采集共用触发条件与采集点，独立调用，失败互不影响
+    # 用户画像采集：与技能采集共用触发条件、采集点与同一 state 对象，独立 LLM 调用，失败互不影响
     profile_note = ""
     if user_present:
         try:
-            profile_note = collect_profile(summary, session, tool_calls, errors)
+            profile_note = collect_profile(state, summary, session, tool_calls, errors)
         except Exception as e:
             profile_note = f"画像采集异常: {str(e)[:150]}"
 
     skill_note = _collect_skill()
     return f"{profile_note}\n{skill_note}" if profile_note else skill_note
+
+
+def _transcript_touches_private(path: str, offset: int = 0) -> bool:
+    """检查轨迹文件新增段是否命中隐私模式（防截断漏网：摘要截断后可能丢掉后文的私密路径）。
+    与 TS 侧 buildTraceText(window) 全量检查对齐；文件不可读时返回 False（不误杀）。"""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        tail = "".join(lines[offset:] if offset > 0 else lines)[-30000:]
+        return touches_private(tail) if tail else False
+    except Exception:
+        return False
 
 
 def _advance(state: dict, session: str, offset: int, transcript: str) -> None:
@@ -631,9 +644,11 @@ def _line_count(path: str) -> int:
 # 用户画像采集（与技能采集同链路：同采集点、同触发条件，独立 LLM 调用，互不影响）
 # ---------------------------------------------------------------------------
 
-def collect_profile(summary: str, session: str, tool_calls: int, errors: int) -> str:
-    """从轨迹摘要提炼用户画像草稿，写入 <SE_ROOT>/profiles/，待进化流程提炼进 USER.md。"""
-    state = read_state()
+def collect_profile(state: dict, summary: str, session: str, tool_calls: int, errors: int) -> str:
+    """从轨迹摘要提炼用户画像草稿，写入 <SE_ROOT>/profiles/，待进化流程提炼进 USER.md。
+
+    注意：state 由调用方传入并共享（与技能采集同一对象），禁止内部重新 read_state，
+    否则画像侧的计数写入会被技能侧的旧对象覆盖（反之亦然）。"""
 
     # 堆积上限：画像草稿过多说明进化久未触发，暂停采集并提示
     try:

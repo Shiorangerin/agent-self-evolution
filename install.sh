@@ -40,6 +40,11 @@ install_core() {
   mkdir -p "$SE_ROOT"
   cp -R "$REPO_DIR/core" "$SE_ROOT/core"
   python3 "$SE_ROOT/core/init.py"
+  # 老路径迁移提示：Pi 扩展曾硬编码 ~/.pi/agent/evolution，老用户数据不会自动搬家
+  local legacy="$HOME/.pi/agent/evolution"
+  if [[ "$SE_ROOT" != "$legacy" && -d "$legacy" && -f "$legacy/state.json" ]]; then
+    warn "发现老数据目录 $legacy（历史统计/候选在其中），新目录为 $SE_ROOT；如需延续统计可手动合并：cp -rn \"$legacy/\"* \"$SE_ROOT/\"（-n 不覆盖新文件）"
+  fi
   say "核心就绪（collect.py / init.py / templates）"
 }
 
@@ -114,10 +119,10 @@ with open(cfg_path, "w", encoding="utf-8") as f:
 PY
     say "已把采集器后端（$backend）写入 $cfg"
   else
-    cat <<'EOF'
+    cat <<EOF
 [install] ⚠️  采集器模型未配置：当前默认探测顺序为 自定义命令 → claude CLI → codex CLI → OpenAI 兼容 API。
 [install]    其中 claude/codex CLI 会按你的登录态计费，采集可能产生费用！
-[install]    请让 AI 助手把以下选项与成本影响解释给你，由你选择后写入 $SE_ROOT/config.json 的 collector 段：
+[install]    请让 AI 助手把以下选项与成本影响解释给你，由你选择后写入 $cfg 的 collector 段：
 [install]      - backend:  auto | custom | claude | codex | api（钉扎单一后端；推荐钉扎便宜/免费后端）
 [install]      - llmCmd:   自定义命令，{prompt} 占位（推荐）
 [install]      - apiBase / apiKey / apiModel: OpenAI 兼容 API（推荐，模型选便宜/免费）
