@@ -1,0 +1,10 @@
+{
+  "collector": {
+    "backend": "auto",
+    "llmCmd": "",
+    "apiBase": "",
+    "apiKey": "",
+    "apiModel": "",
+    "models": []
+  }
+}

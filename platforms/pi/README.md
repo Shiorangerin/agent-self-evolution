@@ -51,7 +51,19 @@ cp platforms/pi/skills/self-evolve/SKILL.md ~/.pi/agent/skills/self-evolve/SKILL
 
 ### 4. LLM 后端
 
-Pi 扩展直接使用 pi 自身的模型注册表（`modelRegistry`）发起低成本采集调用，**无需额外配置**。采集使用 `reasoningEffort: "minimal"` 与 `maxTokens: 2000` 控制成本。
+Pi 扩展默认使用内置**免费模型链**（按序降级），无需额外配置；采集使用 `reasoningEffort: "low"` 与受限 `maxTokens` 控制成本。
+
+内置链模型须存在于你的 `~/.pi/agent/models.json`，否则会被过滤；若你的环境没有这些模型，或想换成自己的便宜/免费模型，在 `$SE_ROOT/config.json` 的 `collector.models` 配置自选链（优先生效）：
+
+```json
+{
+  "collector": {
+    "models": [{ "provider": "your-provider", "id": "your-cheap-model" }]
+  }
+}
+```
+
+⚠️ 不要把昂贵模型填进采集链：采集是高频后台调用。
 
 ## 使用
 

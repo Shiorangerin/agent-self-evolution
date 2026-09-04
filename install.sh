@@ -43,11 +43,97 @@ install_core() {
   say "核心就绪（collect.py / init.py / templates）"
 }
 
+# ---------- 采集器模型选择（防止采集默认用到昂贵模型） ----------
+# 首次安装且仍为默认配置时提示：交互终端提供菜单，非交互（AI 代装）输出提示供 AI 转达给用户
+configure_collector_model() {
+  local cfg="$SE_ROOT/config.json"
+  [[ -f "$cfg" ]] || return 0
+
+  local need_cfg
+  need_cfg="$(python3 - "$cfg" <<'PY'
+import json, sys
+try:
+    c = json.load(open(sys.argv[1], encoding="utf-8")).get("collector") or {}
+except Exception:
+    c = {}
+used_default = (
+    c.get("backend", "auto") == "auto" and not c.get("llmCmd")
+    and not c.get("apiBase") and not (c.get("models") or [])
+)
+print("yes" if used_default else "no")
+PY
+)"
+  [[ "$need_cfg" == "yes" ]] || return 0
+
+  if [[ -t 0 ]]; then
+    cat <<'EOF'
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 采集器模型选择（防止采集默认用到昂贵模型）                ┃
+┃ 采集器每次任务结束会用所选后端调用 LLM（技能候选+用户画像）┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+  1) OpenAI 兼容 API   —— 自己指定便宜/免费模型（推荐）
+  2) 自定义命令        —— 完全自控，{prompt} 占位（推荐）
+  3) claude CLI        —— 复用 Claude Code 登录态（按用量计费！）
+  4) codex CLI         —— 复用 Codex 登录态（按用量计费！）
+  5) auto              —— 保持默认探测（可能命中计费 CLI）
+  6) 暂不配置          —— 稍后自行编辑 config.json
+EOF
+    local mchoice
+    read -rp "输入序号 [1-6，回车=6]: " mchoice
+    mchoice="${mchoice:-6}"
+    local backend="" api_base="" api_key="" api_model="" llm_cmd=""
+    case "$mchoice" in
+      1) backend="api"
+         read -rp "API Base（如 https://api.example.com/v1）: " api_base
+         read -rp "API Key: " api_key
+         read -rp "模型名（建议选便宜/免费模型）: " api_model ;;
+      2) backend="custom"
+         read -rp "命令（用 {prompt} 占位，如 my-llm \"{prompt}\"）: " llm_cmd ;;
+      3) backend="claude" ;;
+      4) backend="codex" ;;
+      5) backend="auto" ;;
+      *) say "跳过模型配置（可稍后编辑 $cfg）"; return 0 ;;
+    esac
+    python3 - "$cfg" "$backend" "$api_base" "$api_key" "$api_model" "$llm_cmd" <<'PY'
+import json, sys
+cfg_path, backend, api_base, api_key, api_model, llm_cmd = sys.argv[1:7]
+try:
+    cfg = json.load(open(cfg_path, encoding="utf-8"))
+except Exception:
+    cfg = {}
+c = cfg.setdefault("collector", {})
+c["backend"] = backend
+if api_base: c["apiBase"] = api_base
+if api_key: c["apiKey"] = api_key
+if api_model: c["apiModel"] = api_model
+if llm_cmd: c["llmCmd"] = llm_cmd
+with open(cfg_path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+PY
+    say "已把采集器后端（$backend）写入 $cfg"
+  else
+    cat <<'EOF'
+[install] ⚠️  采集器模型未配置：当前默认探测顺序为 自定义命令 → claude CLI → codex CLI → OpenAI 兼容 API。
+[install]    其中 claude/codex CLI 会按你的登录态计费，采集可能产生费用！
+[install]    请让 AI 助手把以下选项与成本影响解释给你，由你选择后写入 $SE_ROOT/config.json 的 collector 段：
+[install]      - backend:  auto | custom | claude | codex | api（钉扎单一后端；推荐钉扎便宜/免费后端）
+[install]      - llmCmd:   自定义命令，{prompt} 占位（推荐）
+[install]      - apiBase / apiKey / apiModel: OpenAI 兼容 API（推荐，模型选便宜/免费）
+[install]      - models:   Pi 平台自选采集模型链 [{ "provider": "...", "id": "..." }]
+EOF
+  fi
+}
+
 # ---------- 3. 各平台安装 ----------
 install_pi() {
   say "安装 Pi 适配…"
   local pi_dir="$HOME/.pi/agent"
-  [[ -d "$pi_dir/extensions" ]] || die "未找到 $pi_dir/extensions，请确认已安装 pi-coding-agent"
+  if [[ ! -d "$pi_dir/extensions" ]]; then
+    warn "未找到 $pi_dir/extensions，跳过 Pi 适配（未安装 pi-coding-agent；仅安装 all 时可忽略）"
+    return 1
+  fi
   cp "$REPO_DIR/platforms/pi/extensions/self-evolve.ts"   "$pi_dir/extensions/"
   cp "$REPO_DIR/platforms/pi/extensions/skill-usage.ts"   "$pi_dir/extensions/"
   mkdir -p "$pi_dir/skills/self-evolve"
@@ -187,6 +273,7 @@ EOF
 
 # ---------- 执行 ----------
 install_core
+configure_collector_model
 case "$PLATFORM" in
   pi)          install_pi ;;
   claude-code) install_claude_code ;;

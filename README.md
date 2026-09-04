@@ -150,6 +150,7 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 | `logs/session-summaries/` | 每日工作总结存档 |
 | `logs/archive/` | 按月归档的历史经验日志（主日志超限后自动归档） |
 | `state.json` | 系统状态：统计计数、上次进化/采集时间、拒绝原因 |
+| `config.json` | 采集器配置：后端选择、便宜/免费模型、Pi 模型链（见「采集器模型选择」） |
 | `usage.json` | 技能使用统计（强/弱信号 + 成功/失败/未知结果归因 + 失败原因） |
 | `core/` | 平台无关核心（collect.py / track_usage.py / init.py / templates） |
 
@@ -281,7 +282,7 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 
 - **每次**满足触发条件的任务（≥5 次工具调用或出现错误）都会产生一次 LLM 调用，虽然成本经过控制（低推理强度 + 截断 + 输出限制），但**不是零成本**；
 - 高频使用下（每天几十个任务），每天会产生几十次低成本调用，每月累计可能达到数美元级别（取决于你的模型定价）；
-- **控制手段**：调高 `SE_MIN_TOOL_CALLS`、设置 `SE_THROTTLE_MS` 节流、调低 `SE_MAX_OUTPUT_TOKENS`、用更便宜的模型做采集（如通过 `SE_LLM_CMD` 指定）、或直接卸载扩展停止采集；
+- **控制手段**：调高 `SE_MIN_TOOL_CALLS`、设置 `SE_THROTTLE_MS` 节流、调低 `SE_MAX_OUTPUT_TOKENS`、在 config.json 指定便宜/免费的采集模型（见「采集器模型选择」）、或直接卸载扩展停止采集；
 - 进化流程（手动触发）的一次深度审查可能消耗较多 token，这是预期行为。
 
 ### R2. 隐私与数据外泄（确定性风险，需你主动规避）
@@ -349,7 +350,7 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 
 - 采集 LLM 调用复用 `claude` / `codex` CLI 的登录态（或你配置的 API Key）；
 - 如果这些 CLI 未登录/未安装，采集会静默失败（记录 rejection），系统其余部分不受影响；
-- 建议：至少配置一种 LLM 后端（见 [LLM 后端](#llm-后端)）。
+- 建议：至少配置一种 LLM 后端（见 [采集器模型选择](#采集器模型选择成本控制重要)）；
 
 ### R12. 这不是「自动调参/自动改写人格」系统
 
@@ -384,17 +385,49 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 | `SE_API_BASE` | 无 | OpenAI 兼容 API 地址（如 `https://api.example.com/v1`） |
 | `SE_API_KEY` | 无 | OpenAI 兼容 API Key |
 | `SE_API_MODEL` | 无 | OpenAI 兼容 API 模型名 |
+| `SE_BACKEND` | 无 | 钉扎采集后端：`custom` / `claude` / `codex` / `api`（也可在 config.json 配置，优先级：环境变量 > config.json） |
+
+### 采集器模型选择（成本控制，重要）
+
+采集器每次任务结束会调用所选后端完成两路采集（技能候选 + 用户画像）。**为避免默认探测命中按登录态计费的 CLI，请在安装时选择采集模型**：
+
+| 选项 | 配置方式 | 成本 |
+| --- | --- | --- |
+| OpenAI 兼容 API（推荐） | config.json：`backend: "api"` + `apiBase` / `apiKey` / `apiModel` | 你自己的 API 计费，选便宜/免费模型即可 |
+| 自定义命令（推荐） | config.json：`backend: "custom"` + `llmCmd`（`{prompt}` 占位） | 完全自控 |
+| Pi 自选模型链 | config.json：`collector.models: [{provider, id}]` | 须存在于 `~/.pi/agent/models.json`；未配置时用内置免费链 |
+| claude CLI | `backend: "claude"` | ⚠️ 复用 Claude Code 登录态，按用量计费 |
+| codex CLI | `backend: "codex"` | ⚠️ 复用 Codex 登录态，按用量计费 |
+| auto（默认） | 不配置 | ⚠️ 依次探测 llmCmd → claude → codex → API，可能命中计费 CLI |
+
+**配置文件**：`$SE_ROOT/config.json`（首次初始化自动生成）：
+
+```json
+{
+  "collector": {
+    "backend": "api",
+    "llmCmd": "",
+    "apiBase": "https://api.example.com/v1",
+    "apiKey": "sk-...",
+    "apiModel": "your-cheap-model",
+    "models": []
+  }
+}
+```
+
+**优先级**：环境变量（`SE_LLM_CMD` / `SE_API_*` / `SE_BACKEND`）> config.json > 内置默认。
+**钉扎保证**：`backend` 指定为 `custom` / `claude` / `codex` / `api` 时，若该后端未配置则**明确报错**，绝不静默降级到其他（可能计费的）后端。
 
 ### LLM 后端
 
-采集器自动按以下优先级探测（`core/collect.py`）：
+采集器后端解析（`core/collect.py`，优先级从高到低）：
 
-1. `SE_LLM_CMD`（自定义命令，最灵活）；
+1. 环境变量 / config.json 中的自定义命令（`SE_LLM_CMD` / `collector.llmCmd`）；
 2. `claude` CLI（`claude -p`，复用 Claude Code 登录态）；
 3. `codex` CLI（`codex exec`，复用 Codex 登录态）；
-4. `SE_API_BASE` + `SE_API_KEY` + `SE_API_MODEL`（OpenAI 兼容 API）。
+4. OpenAI 兼容 API（`SE_API_*` / `collector.api*`）。
 
-全部不可用时采集静默失败（记录原因），**不影响 agent 正常工作**。
+`collector.backend`（或 `SE_BACKEND`）可钉扎到单一后端。全部不可用时采集静默失败（记录原因），**不影响 agent 正常工作**。
 
 ---
 
@@ -416,7 +449,7 @@ A：在。数据目录是共享的，Pi / Claude Code / Codex 读同一份 `$SE_
 A：1) 删除 hook 配置（Claude Code 的 settings.json 中的 Stop 条目 / Codex 的 hooks.json）；2) 删除 Pi 扩展文件；3) 删除 `$SE_ROOT` 目录。不残留任何后台进程。
 
 **Q：采集用的模型能单独指定吗？**
-A：能。`SE_LLM_CMD` 可指定任意命令/模型；Pi 平台则用 pi 当前模型（可临时切换）。
+A：能，且强烈建议。在 `$SE_ROOT/config.json` 的 collector 段指定便宜/免费后端（见「采集器模型选择」），避免默认探测命中按登录态计费的 CLI；Pi 平台还可用 `collector.models` 自选模型链。
 
 **Q：技能格式有要求吗？**
 A：frontmatter 要求 `name`（小写字母数字连字符）+ `description`（≤1024 字符，写明何时使用）；正文 ≤8000 字符。可用 `scripts/candidate_preflight.py` 零 token 预检。

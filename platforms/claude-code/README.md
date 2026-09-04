@@ -16,11 +16,12 @@ platforms/claude-code/
 ## 前置条件
 
 1. **core 已安装**：运行 `python3 $SE_ROOT/core/init.py` 初始化数据目录（`$SE_ROOT` 默认 `$HOME/.config/agent-self-evolution/`，可用环境变量覆盖）。
-2. **LLM 后端**（collect.py 自动探测，按优先级）：
+2. **LLM 后端**（collect.py 解析，环境变量 > config.json > 内置顺序）：
+   - config.json `collector` 段（**推荐**：钉扎便宜/免费后端，见 README「采集器模型选择」）；
    - 环境变量 `SE_LLM_CMD`（自定义命令，用 `{prompt}` 占位符传提示词）；
-   - `claude` CLI（**推荐**：Claude Code 用户通常已登录，无需额外配置）；
-   - `codex` CLI；
-   - OpenAI 兼容 API（`SE_API_BASE` / `SE_API_KEY` / `SE_API_MODEL`）。
+   - `claude` CLI（复用 Claude Code 登录态；⚠️ 按登录态计费，高频采集可能产生费用，建议改用便宜/免费后端）；
+   - `codex` CLI（⚠️ 同上）；
+   - OpenAI 兼容 API（`SE_API_BASE` / `SE_API_KEY` / `SE_API_MODEL`，推荐指定便宜/免费模型）。
 
 ## 推荐安装方式（复制给 AI）
 

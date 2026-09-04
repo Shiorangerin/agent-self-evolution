@@ -36,9 +36,10 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { buildTraceSummary, buildTraceText, extractText, isSelfManagementSession, privatePatterns, slugify, touchesPrivateText } from "./lib/evolution-core.ts";
 
-const EVO_DIR = join(homedir(), ".pi", "agent", "evolution");
+const EVO_DIR = process.env.SE_ROOT || join(homedir(), ".config", "agent-self-evolution");
 const CANDIDATES_DIR = join(EVO_DIR, "candidates");
 const PROFILES_DIR = join(EVO_DIR, "profiles");
+const CONFIG_FILE = join(EVO_DIR, "config.json");
 const LOG_FILE = join(EVO_DIR, "logs", "experience-log.md");
 const STATE_FILE = join(EVO_DIR, "state.json");
 
@@ -51,10 +52,9 @@ const THROTTLE_MS = 0; // 全局节流已关闭（默认关闭）。增量采集
 const MAX_OUTPUT_TOKENS = 3072; // 草拟 skill 的输出预算（2000 实测会截断长草稿，见 LESSONS 2026-08-17）
 const MAX_SKILL_CHARS = 8000; // 草稿长度上限（上限放宽至 8000：防膨胀但不苛待知识密集技能）
 
-// 采集模型链：固定使用免费模型，按序尝试、失败自动降级到下一个。
-// 不再依赖 ctx.model（会话主模型），主模型更换/参数不兼容不再拖垮采集器。
-// 2026-08-21 实测（reasoningEffort "low"）：hy3/muse-spark/nemotron 系均可用；
-// deepseek-v4-flash-free 免费推广已结束（401）、mimo-v2.5-free 常年限流（429）故不入选。
+// 采集模型链：默认使用内置免费模型（不跟随会话主模型，主模型更换不影响采集）。
+// 可在 $SE_ROOT/config.json 的 collector.models 指定自己的模型链（防止默认链不可用时静默失效，
+// 也避免换用昂贵模型）——配置存在且非空时优先生效。
 // 注意：链中模型须存在于 ~/.pi/agent/models.json，否则启动时被过滤。
 const COLLECTOR_MODEL_CHAIN: ReadonlyArray<{ provider: string; id: string }> = [
 	{ provider: "opencode-zen", id: "hy3-free" },
@@ -88,6 +88,18 @@ function nowIso(): string {
 
 function nowLocal(): string {
 	return new Date().toLocaleString("zh-CN", { hour12: false });
+}
+
+/** 读取 $SE_ROOT/config.json 的 collector.models（用户自选采集模型链）；未配置返回空数组 */
+function readConfiguredModels(): { provider: string; id: string }[] {
+	try {
+		const cfg = JSON.parse(readFileSync(CONFIG_FILE, "utf8"));
+		const models = cfg?.collector?.models;
+		if (Array.isArray(models)) {
+			return models.filter((m: any) => m?.provider && m?.id).map((m: any) => ({ provider: String(m.provider), id: String(m.id) }));
+		}
+	} catch { /* 静默：配置缺失/损坏时回退内置链 */ }
+	return [];
 }
 
 /** 读取已启用技能清单（name + 一句话描述），供采集 prompt 查重与代码层拦截 */
@@ -304,11 +316,14 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 			return `条件不满足（工具调用 ${toolCalls} 次、无错误），不值得调用 LLM`;
 		}
 
-		// 满足触发条件 → 解析采集模型链（画像与技能采集共用）
-		const modelChain = COLLECTOR_MODEL_CHAIN.map((cfg) => ({
-			cfg,
-			model: ctx.modelRegistry.find(cfg.provider, cfg.id),
-		})).filter((x) => x.model);
+		// 满足触发条件 → 解析采集模型链（用户配置优先，未配置用内置免费链；画像与技能采集共用）
+		const configuredModels = readConfiguredModels();
+		const modelChain = (configuredModels.length > 0 ? configuredModels : COLLECTOR_MODEL_CHAIN)
+			.map((cfg) => ({
+				cfg,
+				model: ctx.modelRegistry.find(cfg.provider, cfg.id),
+			}))
+			.filter((x) => x.model);
 		if (modelChain.length === 0) return "采集模型链全部不可用（models.json 中无匹配模型）";
 		if (!force) busy.set(sessionFile, "collecting");
 

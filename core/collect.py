@@ -51,6 +51,7 @@ MEMORY_DIR = SE_ROOT / "memory"
 STATE_FILE = SE_ROOT / "state.json"
 USAGE_FILE = SE_ROOT / "usage.json"
 LOG_FILE = LOGS_DIR / "experience-log.md"
+CONFIG_FILE = SE_ROOT / "config.json"
 
 MIN_TOOL_CALLS = int(os.environ.get("SE_MIN_TOOL_CALLS", "5"))   # 工具调用触发阈值
 MAX_CANDIDATES = int(os.environ.get("SE_MAX_CANDIDATES", "20"))  # 候选区堆积上限
@@ -326,12 +327,23 @@ def build_profile_prompt(summary: str) -> str:
 
 
 def call_llm(prompt: str, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
-    """按优先级调用 LLM 后端，返回原始输出文本。"""
+    """按后端选择调用 LLM，返回原始输出文本。
+
+    后端选择（优先级：环境变量 > config.json > 内置顺序）：
+    - backend = auto（默认）：llmCmd/SE_LLM_CMD → claude CLI → codex CLI → OpenAI 兼容 API；
+      注意 auto 可能命中按登录态计费的 CLI，建议在 config.json 显式指定便宜/免费模型；
+    - backend = custom / claude / codex / api：钉扎到单一后端（未配置则报错，不再静默降级到计费 CLI）。
+    """
     env = os.environ
+    ccfg = load_collector_config()
+    backend = (env.get("SE_BACKEND") or str(ccfg.get("backend") or "auto")).strip().lower()
+
+    def want(name: str) -> bool:
+        return backend == "auto" or backend == name
 
     # 1. 自定义命令
-    custom = env.get("SE_LLM_CMD")
-    if custom:
+    custom = env.get("SE_LLM_CMD") or str(ccfg.get("llmCmd") or "")
+    if custom and want("custom"):
         cmd = custom.replace("{prompt}", prompt)
         out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
         if out.returncode == 0:
@@ -339,7 +351,7 @@ def call_llm(prompt: str, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
         raise RuntimeError(f"SE_LLM_CMD 退出码 {out.returncode}: {out.stderr[:200]}")
 
     # 2. claude CLI
-    if _which("claude"):
+    if want("claude") and _which("claude"):
         out = subprocess.run(
             ["claude", "-p", prompt, "--output-format", "text"],
             capture_output=True, text=True, timeout=600,
@@ -349,7 +361,7 @@ def call_llm(prompt: str, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
         raise RuntimeError(f"claude CLI 失败（{out.returncode}）: {out.stderr[:200]}")
 
     # 3. codex CLI（prompt 用 `-` 从 stdin 读，避免多行参数问题）
-    if _which("codex"):
+    if want("codex") and _which("codex"):
         out = subprocess.run(
             ["codex", "exec", "--full-auto", "-C", str(Path.cwd()), "-"],
             input=prompt, capture_output=True, text=True, timeout=600,
@@ -358,10 +370,10 @@ def call_llm(prompt: str, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
             return out.stdout.strip()
         raise RuntimeError(f"codex CLI 失败（{out.returncode}）: {out.stderr[:200]}")
 
-    # 4. OpenAI 兼容 API
-    api_base = env.get("SE_API_BASE")
-    api_key = env.get("SE_API_KEY")
-    api_model = env.get("SE_API_MODEL")
+    # 4. OpenAI 兼容 API（环境变量 > config.json）
+    api_base = env.get("SE_API_BASE") or str(ccfg.get("apiBase") or "")
+    api_key = env.get("SE_API_KEY") or str(ccfg.get("apiKey") or "")
+    api_model = env.get("SE_API_MODEL") or str(ccfg.get("apiModel") or "")
     if api_base and api_key and api_model:
         import urllib.request
         body = json.dumps({
@@ -378,14 +390,27 @@ def call_llm(prompt: str, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
             data = json.loads(resp.read().decode("utf-8"))
         return (data["choices"][0]["message"]["content"] or "").strip()
 
+    backend_hint = f"（backend={backend}）" if backend != "auto" else ""
     raise RuntimeError(
-        "未找到可用的 LLM 后端：请设置 SE_LLM_CMD，或安装 claude/codex CLI，或配置 SE_API_BASE/SE_API_KEY/SE_API_MODEL"
+        f"未找到可用的 LLM 后端{backend_hint}：请在 $SE_ROOT/config.json 的 collector 段指定便宜/免费的采集模型"
+        f"（backend / llmCmd / apiBase+apiKey+apiModel / models），或设置 SE_LLM_CMD / SE_API_* 环境变量，或安装 claude/codex CLI"
     )
 
 
 def _which(name: str) -> bool:
     from shutil import which
     return which(name) is not None
+
+
+def load_collector_config() -> dict:
+    """读取 $SE_ROOT/config.json 的 collector 段（缺失/损坏时返回空 dict，回退内置默认）。"""
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        c = cfg.get("collector") or {}
+        return c if isinstance(c, dict) else {}
+    except Exception:
+        return {}
 
 
 # ---------------------------------------------------------------------------

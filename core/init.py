@@ -49,6 +49,7 @@ def main() -> None:
         (SE_ROOT / d).mkdir(parents=True, exist_ok=True)
     print("  ✓ 目录结构已就绪")
 
+    copy_template("config.json", SE_ROOT / "config.json")
     copy_template("state.json", SE_ROOT / "state.json")
     copy_template("usage.json", SE_ROOT / "usage.json")
     copy_template("experience-log.md", SE_ROOT / "logs" / "experience-log.md")
@@ -69,7 +70,9 @@ def main() -> None:
 
     print("完成。下一步：")
     print("  1. 安装平台适配器（见 platforms/<平台>/README.md）")
-    print("  2. 手动运行一次: python3 core/collect.py --transcript <轨迹文件> --session test --force 验证 LLM 后端")
+    print("  2. 【推荐】配置采集器模型：编辑 SE_ROOT/config.json 的 collector 段，")
+    print("     指定便宜/免费的采集模型，避免默认探测命中按登录态计费的 CLI（见 README「采集器模型选择」）")
+    print("  3. 手动运行一次: python3 core/collect.py --transcript <轨迹文件> --session test --force 验证 LLM 后端")
 
 
 if __name__ == "__main__":

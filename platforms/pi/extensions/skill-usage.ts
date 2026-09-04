@@ -33,7 +33,7 @@ import { join } from "node:path";
 import { buildTraceText, entryText, judgeOutcome } from "./lib/evolution-core.ts";
 import { homedir } from "node:os";
 
-const EVO_DIR = join(homedir(), ".pi", "agent", "evolution");
+const EVO_DIR = process.env.SE_ROOT || join(homedir(), ".config", "agent-self-evolution");
 const USAGE_FILE = join(EVO_DIR, "usage.json");
 const SKILLS_DIR = join(homedir(), ".pi", "agent", "skills");
 

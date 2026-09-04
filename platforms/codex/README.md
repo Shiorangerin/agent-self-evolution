@@ -98,20 +98,21 @@ echo '{"session_id":"test123","cwd":"/tmp","hook_event_name":"Stop","transcript_
 
 ## LLM 后端
 
-`core/collect.py` 自动探测 LLM 后端（按优先级）：
+`core/collect.py` 解析 LLM 后端（优先级：环境变量 > `$SE_ROOT/config.json` > 内置顺序）：
 
-1. `SE_LLM_CMD` — 自定义命令，用 `{prompt}` 占位符传入提示词
-2. `claude` CLI — 复用 Claude Code 登录态
-3. `codex` CLI — 复用 Codex 登录态（`codex exec`）
-4. OpenAI 兼容 API — 配置环境变量：
+0. **config.json `collector` 段（推荐）**：钉扎便宜/免费后端，见 README「采集器模型选择」；
+1. `SE_LLM_CMD` / `collector.llmCmd` — 自定义命令，用 `{prompt}` 占位符传入提示词
+2. `claude` CLI — 复用 Claude Code 登录态（⚠️ 按登录态计费）
+3. `codex` CLI — 复用 Codex 登录态（`codex exec`；⚠️ 按登录态计费）
+4. OpenAI 兼容 API — config.json 或环境变量（推荐指定便宜/免费模型）：
 
 ```bash
 export SE_API_BASE="https://api.example.com/v1"
 export SE_API_KEY="sk-..."
-export SE_API_MODEL="your-model"
+export SE_API_MODEL="your-cheap-model"
 ```
 
-Codex 用户通常无需额外配置：只要本机已登录 codex CLI，采集器会自动复用。
+`collector.backend` 可钉扎到 `custom` / `claude` / `codex` / `api` 单一后端；钉扎后若该后端不可用会明确报错，不会静默降级到其他可能计费的后端。
 也可在 `~/.codex/config.toml` 中为 hook 命令注入环境变量（见 Codex 文档的 env 配置）。
 
 ## 故障排查
