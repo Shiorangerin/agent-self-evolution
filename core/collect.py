@@ -225,7 +225,7 @@ def parse_transcript(path: str, offset: int = 0) -> tuple:
                 tool_calls += 1
                 name = (tc.get("name") or "").lower()  # 平台工具名大小写不一（Bash/bash），统一小写匹配
                 args = tc.get("args") or {}
-                if name in ("bash", "bash_command", "command"):
+                if name in ("bash", "bash_command", "command", "exec_command"):
                     cmd = str(args.get("command") or args.get("cmd") or "")
                     if cmd:
                         bash_parts.append(cmd[:200])
@@ -330,71 +330,100 @@ def call_llm(prompt: str, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
     """按后端选择调用 LLM，返回原始输出文本。
 
     后端选择（优先级：环境变量 > config.json > 内置顺序）：
-    - backend = auto（默认）：llmCmd/SE_LLM_CMD → claude CLI → codex CLI → OpenAI 兼容 API；
+    - backend = auto（默认）：llmCmd/SE_LLM_CMD → claude CLI → codex CLI → OpenAI 兼容 API，
+      逐个尝试、失败自动试下一个（累计报错）；
       注意 auto 可能命中按登录态计费的 CLI，建议在 config.json 显式指定便宜/免费模型；
-    - backend = custom / claude / codex / api：钉扎到单一后端（未配置则报错，不再静默降级到计费 CLI）。
+    - backend = custom / claude / codex / api：钉扎到单一后端（失败或未配置则直接报错，
+      绝不静默降级到其他可能计费的后端）。
     """
     env = os.environ
     ccfg = load_collector_config()
     backend = (env.get("SE_BACKEND") or str(ccfg.get("backend") or "auto")).strip().lower()
+    errors: list = []
 
     def want(name: str) -> bool:
         return backend == "auto" or backend == name
 
+    def fail(msg: str) -> None:
+        # 钉扎模式直接报错（防静默命中计费后端）；auto 模式记错并试下一个
+        if backend != "auto":
+            raise RuntimeError(msg)
+        errors.append(msg)
+
     # 1. 自定义命令
     custom = env.get("SE_LLM_CMD") or str(ccfg.get("llmCmd") or "")
     if custom and want("custom"):
-        cmd = custom.replace("{prompt}", prompt)
-        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
-        if out.returncode == 0:
-            return out.stdout.strip()
-        raise RuntimeError(f"SE_LLM_CMD 退出码 {out.returncode}: {out.stderr[:200]}")
+        try:
+            cmd = custom.replace("{prompt}", prompt)
+            out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip()
+            fail(f"SE_LLM_CMD 失败（退出码 {out.returncode}）: {out.stderr[:200]}")
+        except RuntimeError:
+            raise
+        except Exception as e:
+            fail(f"SE_LLM_CMD 异常: {str(e)[:200]}")
 
     # 2. claude CLI
     if want("claude") and _which("claude"):
-        out = subprocess.run(
-            ["claude", "-p", prompt, "--output-format", "text"],
-            capture_output=True, text=True, timeout=600,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            return out.stdout.strip()
-        raise RuntimeError(f"claude CLI 失败（{out.returncode}）: {out.stderr[:200]}")
+        try:
+            out = subprocess.run(
+                ["claude", "-p", prompt, "--output-format", "text"],
+                capture_output=True, text=True, timeout=600,
+            )
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip()
+            fail(f"claude CLI 失败（{out.returncode}）: {out.stderr[:200]}")
+        except RuntimeError:
+            raise
+        except Exception as e:
+            fail(f"claude CLI 异常: {str(e)[:200]}")
 
     # 3. codex CLI（prompt 用 `-` 从 stdin 读，避免多行参数问题）
     if want("codex") and _which("codex"):
-        out = subprocess.run(
-            ["codex", "exec", "--full-auto", "-C", str(Path.cwd()), "-"],
-            input=prompt, capture_output=True, text=True, timeout=600,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            return out.stdout.strip()
-        raise RuntimeError(f"codex CLI 失败（{out.returncode}）: {out.stderr[:200]}")
+        try:
+            out = subprocess.run(
+                ["codex", "exec", "--full-auto", "-C", str(Path.cwd()), "-"],
+                input=prompt, capture_output=True, text=True, timeout=600,
+            )
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip()
+            fail(f"codex CLI 失败（{out.returncode}）: {out.stderr[:200]}")
+        except RuntimeError:
+            raise
+        except Exception as e:
+            fail(f"codex CLI 异常: {str(e)[:200]}")
 
     # 4. OpenAI 兼容 API（环境变量 > config.json）
     api_base = env.get("SE_API_BASE") or str(ccfg.get("apiBase") or "")
     api_key = env.get("SE_API_KEY") or str(ccfg.get("apiKey") or "")
     api_model = env.get("SE_API_MODEL") or str(ccfg.get("apiModel") or "")
-    if api_base and api_key and api_model:
-        import urllib.request
-        body = json.dumps({
-            "model": api_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            api_base.rstrip("/") + "/chat/completions",
-            data=body,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        )
-        with urllib.request.urlopen(req, timeout=600) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return (data["choices"][0]["message"]["content"] or "").strip()
+    if api_base and api_key and api_model and want("api"):
+        try:
+            import urllib.request
+            body = json.dumps({
+                "model": api_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                api_base.rstrip("/") + "/chat/completions",
+                data=body,
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+            )
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            return (data["choices"][0]["message"]["content"] or "").strip()
+        except RuntimeError:
+            raise
+        except Exception as e:
+            fail(f"API 后端异常: {str(e)[:200]}")
+    elif backend == "api":
+        fail("api 后端已钉扎但未配置（需 apiBase+apiKey+apiModel）")
 
     backend_hint = f"（backend={backend}）" if backend != "auto" else ""
-    raise RuntimeError(
-        f"未找到可用的 LLM 后端{backend_hint}：请在 $SE_ROOT/config.json 的 collector 段指定便宜/免费的采集模型"
-        f"（backend / llmCmd / apiBase+apiKey+apiModel），或设置 SE_LLM_CMD / SE_API_* 环境变量，或安装 claude/codex CLI"
-    )
+    detail = "; ".join(errors) if errors else "无可用后端：请在 $SE_ROOT/config.json 的 collector 段指定便宜/免费的采集模型（backend / llmCmd / apiBase+apiKey+apiModel），或设置 SE_LLM_CMD / SE_API_* 环境变量，或安装 claude/codex CLI"
+    raise RuntimeError(f"未找到可用的 LLM 后端{backend_hint}：{detail}")
 
 
 def _which(name: str) -> bool:

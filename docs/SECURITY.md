@@ -63,7 +63,7 @@ LLM 调用 ──► 发送给 LLM 提供方（唯一的外发数据）
 
 | 场景 | 操作 |
 | --- | --- |
-| 暂停采集（保留数据） | 删除平台 hook 配置（Claude Code settings.json 的 Stop 条目 / Codex hooks.json / Pi 扩展文件改名） |
+| 暂停采集（保留数据） | 删除平台 hook 配置（Claude Code settings.local.json/settings.json 的 Stop 条目 / Codex config.toml 的 [[hooks.Stop]] / Pi 扩展文件改名） |
 | 完全卸载 | 删除 hook 配置 + 删除 Pi 扩展 + `rm -rf $SE_ROOT` |
 | 只清理敏感数据 | 删除 `$SE_ROOT/logs`、`$SE_ROOT/candidates`、`$SE_ROOT/state.json` |
 

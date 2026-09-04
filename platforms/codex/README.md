@@ -9,7 +9,7 @@ platforms/codex/
 ├── hooks/
 │   ├── normalize_codex.py   # Codex transcript → 统一 JSONL 归一化器（兼容新旧格式）
 │   └── collect.sh           # Stop hook 入口：定位轨迹 → 归一化 → 调 core/collect.py
-├── hooks.json               # hooks 配置样例（合并到 ~/.codex/hooks.json）
+├── codex-hooks.toml         # Codex 0.147+ hooks 配置样例（合并到 config.toml）
 ├── AGENTS.md                # 进化流程说明书（Codex 自动加载）
 └── README.md                # 本文件
 ```
@@ -20,7 +20,7 @@ platforms/codex/
 请帮我安装 agent-self-evolution 的 Codex 平台适配：
 1. git clone https://github.com/Shiorangerin/agent-self-evolution.git
 2. 运行 bash install.sh codex
-3. 验证 ~/.codex/hooks.json 存在且合法、~/.codex/config.toml 有 [features] codex_hooks = true、~/.codex/hooks/ 下文件存在
+3. 验证 ~/.codex/config.toml 里有 [[hooks.Stop]] 与 [features] hooks = true，并且 command 指向 $SE_ROOT/platforms/codex/hooks/collect.sh 的绝对路径
 4. 提醒我：Codex 首次运行 hooks 时可能要求 trust 确认，需要允许
 ````
 
@@ -41,21 +41,18 @@ python3 core/init.py
 
 ### ② 安装 hooks 配置
 
-把 `hooks.json` 的内容合并到 `~/.codex/hooks.json`（文件不存在则直接创建）：
+Codex 0.147+ 只从 `~/.codex/config.toml` 读取 hooks，**不要继续依赖 `~/.codex/hooks.json`**。
+把 `codex-hooks.toml` 的内容合并到 `~/.codex/config.toml`（文件不存在则先创建）：
 
-```json
-{
-  "hooks": {
-    "Stop": [
-      { "command": "bash $HOME/.config/agent-self-evolution/platforms/codex/hooks/collect.sh" }
-    ]
-  }
-}
+```toml
+[[hooks.Stop]]
+hooks = [
+  { type = "command", command = "bash /absolute/path/to/SE_ROOT/platforms/codex/hooks/collect.sh", async = false }
+]
 ```
 
-**注意**：`command` 中的路径是默认安装位置的样例，请按实际安装位置调整。
-如果 `$HOME` 在你的环境中不展开，请换成不含用户名的绝对路径。
-（也可以不用 hooks.json，改在 `~/.codex/config.toml` 的 `[hooks]` 段配置同样的 Stop 命令。）
+`type = "command"` 与 `async = false` 是 Codex 0.147 hook schema 的必填字段；`$HOME` 不会被 TOML 展开，
+请把 `/absolute/path/to/SE_ROOT` 换成你的 `$SE_ROOT` 绝对路径。安装脚本会自动完成这一步。
 
 ### ③ 开启 hooks 功能开关
 
@@ -63,11 +60,13 @@ Codex 需要显式开启 hooks 特性。编辑 `~/.codex/config.toml`，确保�
 
 ```toml
 [features]
-codex_hooks = true
+hooks = true
 ```
 
-幂等说明：如果已有 `[features]` 段，只补上 `codex_hooks = true` 一行即可；
+幂等说明：如果已有 `[features]` 段，只补上 `hooks = true` 一行即可；
 重复写入相同配置无害。
+
+旧配置 `codex_hooks = true` 目前仍会被映射到 `hooks`，但新版本已把它标记为 legacy alias，推荐直接使用 `hooks = true`。
 
 ### ④ 信任 hooks（首次运行）
 
@@ -94,7 +93,8 @@ echo '{"session_id":"test123","cwd":"/tmp","hook_event_name":"Stop","transcript_
   | bash platforms/codex/hooks/collect.sh
 ```
 
-   正常应输出采集结果（生成候选 / 条件不满足 / 拒绝原因），且退出码恒为 0。
+   正常退出码恒为 0；加 `SE_HOOK_VERBOSE=1` 可看到采集结果（生成候选 / 条件不满足 / 拒绝原因）。
+   hook 内默认静默，因为 Codex 0.147 会把非 JSON 的 Stop hook stdout 视为失败输出。
 
 ## LLM 后端
 
@@ -119,8 +119,9 @@ export SE_API_MODEL="your-cheap-model"
 
 | 现象 | 可能原因 | 处理 |
 | --- | --- | --- |
-| hook 完全不触发 | 功能开关未开 | 确认 `~/.codex/config.toml` 有 `[features] codex_hooks = true` |
-| hook 不触发 | hooks.json 位置/格式错误 | 确认文件在 `~/.codex/hooks.json` 且是合法 JSON（可 `python3 -m json.tool` 校验） |
+| hook 完全不触发 | 功能开关未开 | 确认 `~/.codex/config.toml` 有 `[features] hooks = true` |
+| hook 不触发 | hooks 写在旧版 `hooks.json` | 把 Stop hook 迁移到 `~/.codex/config.toml` 的 `[[hooks.Stop]]` |
+| hook 不触发 | handler 缺少必填字段 | 确认 `{ type = "command", command = "...", async = false }` 三项都存在 |
 | hook 不触发 | 未信任 hook | 触发一次任务结束，在弹出的信任询问中选择允许 |
 | 无候选生成 | transcript 定位失败 | 手动检查 `~/.codex/sessions/` 下的会话文件；hook 输入若无 `transcript_path`，脚本按 `session_id` 与最近 10 分钟兜底查找 |
 | 无候选生成 | 条件不满足 | 工具调用 <5 次且无错误时不值得沉淀，属正常行为（见 experience-log.md） |

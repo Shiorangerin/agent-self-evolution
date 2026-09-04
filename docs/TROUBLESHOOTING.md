@@ -26,17 +26,18 @@ cat ~/.config/agent-self-evolution/state.json   # 系统状态
 
 ### Claude Code
 
-- 检查配置位置：用户级 `~/.claude/settings.json` / 项目级 `.claude/settings.json`（优先级用户级 > 项目级，两者会合并，**重复注册会重复执行**）；
+- 检查配置位置：用户级 `~/.claude/settings.json`、用户本地 `~/.claude/settings.local.json` / 项目级 `.claude/settings.json`（若多个位置都注册，**重复注册会重复执行**）；
 - 检查 JSON 语法：`python3 -m json.tool ~/.claude/settings.json`；
 - 检查 command 路径：用户级配置里 `${CLAUDE_PROJECT_DIR}` 占位符不生效，必须用绝对路径；
 - 检查 hook 是否被 permission 拦截：Claude Code 首次运行自定义 hook 可能要求确认；
-- 临时验证：手动执行 `echo '{"session_id":"t","transcript_path":"/path/to/transcript.jsonl"}' | bash ~/.claude/hooks/collect.sh`，看输出。
+- 临时验证：手动执行 `echo '{"session_id":"t","transcript_path":"/path/to/transcript.jsonl"}' | bash ~/.claude/hooks/agent-self-evolution/collect.sh`，看输出。
 
 ### Codex
 
-- 确认 `~/.codex/config.toml` 有 `[features] codex_hooks = true`；
-- 确认 `~/.codex/hooks.json` 存在且 JSON 合法；
-- 确认 hook 已通过 trust 确认（首次运行会在终端提示，接受即可；被跳过可运行 `codex hooks trust` 类命令或删除 hooks.json 重新注册）；
+- 确认 `~/.codex/config.toml` 有 `[features] hooks = true`；
+- 确认 Stop hook 写在 `~/.codex/config.toml` 的 `[[hooks.Stop]]`，并且 handler 包含 `type = "command"`、`command`、`async = false`；
+- 确认没有继续依赖 `~/.codex/hooks.json`：Codex 0.147+ 不会读取该文件；
+- 确认 hook 已通过 trust 确认（首次运行会在终端提示，接受即可；自动化测试可用 `codex exec --dangerously-bypass-hook-trust` 临时验证）；
 - Codex hooks 处于快速迭代期，升级 CLI 后协议可能变化，检查是否报错被忽略。
 
 ### Pi

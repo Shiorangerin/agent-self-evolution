@@ -3,7 +3,7 @@
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "bash ${CLAUDE_PROJECT_DIR}/.claude/hooks/collect.sh" }
+          { "type": "command", "command": "bash ${CLAUDE_PROJECT_DIR}/.claude/hooks/agent-self-evolution/collect.sh" }
         ]
       }
     ]

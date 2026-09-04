@@ -13,8 +13,34 @@ say()  { printf '\033[1;36m[install]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[警告]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[错误]\033[0m %s\n' "$*"; exit 1; }
 
+# ---------- platform docs ----------
+merge_platform_doc() {
+  local dst="$1"
+  local src="$2"
+  local detect="$3"
+  local marker="agent-self-evolution"
+  mkdir -p "$(dirname "$dst")"
+  touch "$dst"
+  if grep -Eq "BEGIN ${marker}|${detect}" "$dst"; then
+    say "平台说明已存在于 $(basename "$dst")，跳过"
+    return
+  fi
+  {
+    echo ''
+    echo "# BEGIN ${marker}"
+    local repo_escaped="${REPO_DIR//\\/\\\\}"
+    repo_escaped="${repo_escaped//&/\\&}"
+    repo_escaped="${repo_escaped//|/\\|}"
+    sed "s|<仓库>|${repo_escaped}|g" "$src"
+    echo "# END ${marker}"
+  } >> "$dst"
+  say "已合并平台说明到 $dst"
+}
+
 # ---------- 0. 环境检查 ----------
 command -v python3 >/dev/null 2>&1 || die "需要 python3（≥3.8），请先安装"
+mkdir -p "$SE_ROOT"
+SE_ROOT="$(cd "$SE_ROOT" && pwd)"
 
 # ---------- 1. 选择平台 ----------
 PLATFORM="${1:-}"
@@ -38,7 +64,8 @@ fi
 install_core() {
   say "安装核心到 $SE_ROOT"
   mkdir -p "$SE_ROOT"
-  cp -R "$REPO_DIR/core" "$SE_ROOT/core"
+  mkdir -p "$SE_ROOT/core"
+  cp -R "$REPO_DIR/core/." "$SE_ROOT/core/"
   python3 "$SE_ROOT/core/init.py"
   # 老路径迁移提示：Pi 扩展曾硬编码 ~/.pi/agent/evolution，老用户数据不会自动搬家
   local legacy="$HOME/.pi/agent/evolution"
@@ -148,59 +175,27 @@ install_pi() {
 
 install_claude_code() {
   say "安装 Claude Code 适配…"
-  local dst="$HOME/.claude"
-  mkdir -p "$dst/hooks"
-  cp "$REPO_DIR/platforms/claude-code/hooks/collect.sh"          "$dst/hooks/collect.sh"
-  cp "$REPO_DIR/platforms/claude-code/hooks/normalize_claude.py" "$dst/hooks/normalize_claude.py"
-  chmod +x "$dst/hooks/collect.sh"
+  local dst="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  mkdir -p "$dst/hooks/agent-self-evolution"
+  dst="$(cd "$dst" && pwd)"
+  cp "$REPO_DIR/platforms/claude-code/hooks/collect.sh"          "$dst/hooks/agent-self-evolution/collect.sh"
+  cp "$REPO_DIR/platforms/claude-code/hooks/normalize_claude.py" "$dst/hooks/agent-self-evolution/normalize_claude.py"
+  chmod +x "$dst/hooks/agent-self-evolution/collect.sh"
   # CLAUDE.md（若不存在则复制，存在则提示）
   if [[ ! -f "$dst/CLAUDE.md" ]]; then
     cp "$REPO_DIR/platforms/claude-code/CLAUDE.md" "$dst/CLAUDE.md"
   else
-    warn "$dst/CLAUDE.md 已存在，跳过（请手动合并 platforms/claude-code/CLAUDE.md 的内容）"
+    merge_platform_doc "$dst/CLAUDE.md" "$REPO_DIR/platforms/claude-code/CLAUDE.md" '自我进化系统.*进化流程说明书'
   fi
-  # 注册 Stop hook（合并到 settings.json）
-  if [[ -f "$dst/settings.json" ]]; then
-    python3 - "$dst/settings.json" "$REPO_DIR/platforms/claude-code/settings.hooks.json" <<'PY'
-import json, sys
-settings_path, hooks_path = sys.argv[1], sys.argv[2]
-with open(settings_path, "r", encoding="utf-8") as f:
-    settings = json.load(f)
-with open(hooks_path, "r", encoding="utf-8") as f:
-    hooks_block = json.load(f)
-settings.setdefault("hooks", {})
-merged = False
-for event, groups in hooks_block.get("hooks", {}).items():
-    existing = settings["hooks"].setdefault(event, [])
-    for group in groups:
-        for h in group.get("hooks", []):
-            cmd = h.get("command", "")
-            if any(cmd in json.dumps(x) for x in existing):
-                continue
-            existing.append(group)
-            merged = True
-with open(settings_path, "w", encoding="utf-8") as f:
-    json.dump(settings, f, ensure_ascii=False, indent=2)
-print("已注册 Stop hook" if merged else "Stop hook 已存在，跳过")
-PY
-  else
-    # 用户级 settings.json：command 必须用绝对路径（${CLAUDE_PROJECT_DIR} 占位符在此处不可靠）
-    python3 - "$REPO_DIR/platforms/claude-code/settings.hooks.json" "$dst/settings.json" "$dst/hooks/collect.sh" <<'PY'
-import json, sys
-src, dst, hook_abs = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(src, "r", encoding="utf-8") as f:
-    cfg = json.load(f)
-for groups in cfg.get("hooks", {}).values():
-    for group in groups:
-        for h in group.get("hooks", []):
-            if "command" in h:
-                h["command"] = "bash " + hook_abs
-with open(dst, "w", encoding="utf-8") as f:
-    json.dump(cfg, f, ensure_ascii=False, indent=2)
-PY
-    say "已创建 $dst/settings.json（Stop hook 已指向绝对路径 $dst/hooks/collect.sh）"
+  local settings_rc=0
+  # 注册 Stop hook；统一检查两个用户级配置，避免 settings.json 和 settings.local.json 双注册。
+  python3 "$REPO_DIR/scripts/hook_config.py" claude "$dst" || settings_rc=$?
+  if [[ "$settings_rc" -eq 2 ]]; then
+    warn "Claude settings JSON 存在解析错误，已跳过自动注册；请手动检查后重试"
+  elif [[ "$settings_rc" -ne 0 ]]; then
+    warn "Claude Stop hook 注册失败，已保留现有配置"
   fi
-  say "Claude Code 适配完成。settings.json 中的 command 已指向 $dst/hooks/collect.sh（项目级安装可自行改用 \${CLAUDE_PROJECT_DIR} 占位符）"
+  say "Claude Code 适配完成。Stop hook 指向 $dst/hooks/agent-self-evolution/collect.sh（项目级安装可自行改用 \${CLAUDE_PROJECT_DIR} 占位符）"
 
   # 用户画像注入：在全局 CLAUDE.md 中幂等追加 @import（Claude Code 支持 @ 绝对路径引用，
   # 进化流程更新 USER.md 后下次会话自动生效）。仅追加引用行，绝不改动用户已有内容。
@@ -223,55 +218,37 @@ install_codex() {
   cp "$REPO_DIR/platforms/codex/hooks/normalize_codex.py"  "$hooks_dst/normalize_codex.py"
   chmod +x "$hooks_dst/collect.sh"
   local dst="$HOME/.codex"
-  mkdir -p "$dst/hooks"
-  cp "$hooks_dst/collect.sh"          "$dst/hooks/collect.sh"
-  cp "$hooks_dst/normalize_codex.py"  "$dst/hooks/normalize_codex.py"
-  chmod +x "$dst/hooks/collect.sh"
-  # hooks.json
-  if [[ -f "$dst/hooks.json" ]]; then
-    python3 - "$dst/hooks.json" "$hooks_dst/collect.sh" <<'PY'
-import json, sys
-path, hook_abs = sys.argv[1], sys.argv[2]
-with open(path, "r", encoding="utf-8") as f:
-    cfg = json.load(f)
-cfg.setdefault("hooks", {}).setdefault("Stop", [])
-cmd = "bash " + hook_abs
-if not any(cmd in json.dumps(h) for h in cfg["hooks"]["Stop"]):
-    cfg["hooks"]["Stop"].append({"command": cmd})
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-    print("已注册 Stop hook")
-else:
-    print("Stop hook 已存在，跳过")
-PY
-  else
-    cat > "$dst/hooks.json" <<EOF
-{
-  "hooks": {
-    "Stop": [
-      { "command": "bash $hooks_dst/collect.sh" }
-    ]
-  }
-}
-EOF
-    say "已创建 $dst/hooks.json"
-  fi
-  # 开启 feature flag（幂等）
+  mkdir -p "$dst"
+  dst="$(cd "$dst" && pwd)"
+  local codex_rc=0
+  # Codex 0.147+ 从 config.toml 读取 hooks；hooks.json 在该版本不会被加载。
   local cfg="$dst/config.toml"
-  if [[ -f "$cfg" ]] && ! grep -q 'codex_hooks' "$cfg"; then
-    printf '\n[features]\ncodex_hooks = true\n' >> "$cfg"
-    say "已在 $cfg 追加 [features] codex_hooks = true"
-  elif [[ ! -f "$cfg" ]]; then
-    printf '[features]\ncodex_hooks = true\n' > "$cfg"
-    say "已创建 ${cfg}（含 [features] codex_hooks = true）"
+  python3 "$REPO_DIR/scripts/hook_config.py" codex "$cfg" "$hooks_dst/collect.sh" || codex_rc=$?
+  if [[ "$codex_rc" -eq 2 ]]; then
+    warn "检测到旧式 hooks.Stop 配置，已保留原文件；请手动迁移后再运行安装"
+  elif [[ "$codex_rc" -ne 0 ]]; then
+    warn "Codex Stop hook 注册失败，已保留原配置"
+  fi
+  # 开启当前 feature flag（0.147+ 使用 hooks；旧名 codex_hooks 已废弃）
+  if command -v codex >/dev/null 2>&1; then
+    if CODEX_HOME="$dst" codex features enable hooks; then
+      say "已启用 Codex hooks feature"
+    else
+      warn "codex features enable hooks 失败，请手动在 $cfg 的 [features] 中加入 hooks = true"
+    fi
   else
-    say "codex_hooks 已在 $cfg 中配置"
+    warn "未找到 codex CLI，请手动在 $cfg 的 [features] 中加入 hooks = true"
+  fi
+
+  # Codex 0.147+ 不读取 hooks.json；保留文件，避免破坏用户自定义 hook。
+  if [[ -f "$dst/hooks.json" ]]; then
+    warn "$dst/hooks.json 已保留；Codex 0.147+ 不会读取它，请手动核对并迁移其中仍需要的 hook"
   fi
   # AGENTS.md
   if [[ ! -f "$dst/AGENTS.md" ]]; then
     cp "$REPO_DIR/platforms/codex/AGENTS.md" "$dst/AGENTS.md"
   else
-    warn "$dst/AGENTS.md 已存在，跳过（请手动合并 platforms/codex/AGENTS.md 的内容）"
+    merge_platform_doc "$dst/AGENTS.md" "$REPO_DIR/platforms/codex/AGENTS.md" 'agent-self-evolution.*Codex 平台进化流程'
   fi
   say "Codex 适配完成。首次运行 hooks 时 Codex 会要求 trust 确认，请允许。"
 }

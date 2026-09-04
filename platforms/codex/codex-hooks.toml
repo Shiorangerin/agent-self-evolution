@@ -1,0 +1,4 @@
+[[hooks.Stop]]
+hooks = [
+  { type = "command", command = "bash /absolute/path/to/SE_ROOT/platforms/codex/hooks/collect.sh", async = false }
+]
