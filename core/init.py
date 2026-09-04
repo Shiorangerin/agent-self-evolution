@@ -4,6 +4,7 @@ agent-self-evolution — 数据目录初始化
 
 创建 <SE_ROOT>（默认 ~/.config/agent-self-evolution/）的完整目录结构与初始文件：
   candidates/   候选技能区（采集器写入，进化流程审查）
+  profiles/     用户画像草稿区（采集器写入，进化流程提炼进 USER.md）
   skills/       已启用技能源文件
   memory/       长期记忆（USER.md 用户画像 / LESSONS.md 踩坑经验）
   logs/         经验日志、每日总结、被拒草稿
@@ -24,6 +25,7 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 STRUCTURE = [
     "candidates",
+    "profiles",
     "skills",
     "memory",
     "logs/session-summaries",

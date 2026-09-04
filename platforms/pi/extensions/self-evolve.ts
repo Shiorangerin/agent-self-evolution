@@ -4,16 +4,20 @@
  * 每次 agent 运行结束（agent_settled）时，后台轻量分析本次会话轨迹：
  * - 统计工具调用次数、错误修复次数
  * - 满足触发条件（工具调用 ≥5 次 / 出现错误并修复）时，
- *   用低成本 LLM 调用草拟一份 SKILL.md 候选，写入 evolution/candidates/
- * - 候选区不进入运行上下文，待用户手动说「进化」时审查启用
+ *   用低成本 LLM 并行发起两路独立采集（失败互不影响）：
+ *   ① 技能候选：草拟 SKILL.md 写入 evolution/candidates/
+ *   ② 用户画像：提炼持久画像草稿写入 evolution/profiles/（待进化流程提炼进 USER.md）
+ * - 候选区与画像区都不进入运行上下文，待用户手动说「进化」时审查 / 提炼
  *
- * 进化完全由用户手动触发（手动模式），本扩展只负责安静地记录候选，
+ * 进化完全由用户手动触发（手动模式），本扩展只负责安静地记录，
  * 不做任何自动唤醒 / 定时触发。
  *
  * 手动触发：/evolve-collect 命令（绕过节流，立即分析当前会话并草拟候选）。
  *
  * 省 token 策略：
- * - 轨迹摘要截断，只保留关键信息
+ * - 轨迹摘要截断，只保留关键信息；外发前做通用脱敏（家目录 → ~）；
+ *   轨迹命中隐私路径模式（diary/.env/密钥等，可用 SE_PRIVATE_PATTERNS 覆盖）时整场熔断，
+ *   内容不外发给任何 LLM（宁可误杀不可放过，force 也不绕过）
  * - 采集模型固定走免费模型链（不跟随会话主模型，主模型更换不影响采集），
  *   按序降级轮询；reasoningEffort 统一 "low"（minimal/off 在「必须思考」型模型上会 400 [1210]）
  * - maxTokens: 3072（要给推理模型留思考空间 + 输出 SKILL.md 正文；2000 实测会截断长草稿）
@@ -30,15 +34,19 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { buildTraceSummary, extractText, isSelfManagementSession, slugify } from "./lib/evolution-core.ts";
+import { buildTraceSummary, buildTraceText, extractText, isSelfManagementSession, privatePatterns, slugify, touchesPrivateText } from "./lib/evolution-core.ts";
 
 const EVO_DIR = join(homedir(), ".pi", "agent", "evolution");
 const CANDIDATES_DIR = join(EVO_DIR, "candidates");
+const PROFILES_DIR = join(EVO_DIR, "profiles");
 const LOG_FILE = join(EVO_DIR, "logs", "experience-log.md");
 const STATE_FILE = join(EVO_DIR, "state.json");
 
 const MIN_TOOL_CALLS = 5; // 工具调用触发阈值
 const MAX_CANDIDATES = 20; // 候选区堆积上限，超过则暂停采集
+const MAX_PROFILES = Number(process.env.SE_MAX_PROFILES) || 20; // 画像草稿堆积上限
+const MAX_PROFILE_CHARS = Number(process.env.SE_MAX_PROFILE_CHARS) || 600; // 画像草稿长度上限（强制最小化）
+const MAX_PROFILE_OUTPUT_TOKENS = Number(process.env.SE_MAX_PROFILE_OUTPUT_TOKENS) || 1024; // 画像采集输出预算
 const THROTTLE_MS = 0; // 全局节流已关闭（默认关闭）。增量采集下节流只影响延迟不影响丢失，无需限频
 const MAX_OUTPUT_TOKENS = 3072; // 草拟 skill 的输出预算（2000 实测会截断长草稿，见 LESSONS 2026-08-17）
 const MAX_SKILL_CHARS = 8000; // 草稿长度上限（上限放宽至 8000：防膨胀但不苛待知识密集技能）
@@ -264,7 +272,7 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 			fromIndex = idx;
 		}
 		const window = fromIndex >= 0 ? entries.slice(fromIndex + 1) : entries;
-		const { toolCalls, errors, summary } = buildTraceSummary(window);
+		const { toolCalls, errors, summary, hasUser } = buildTraceSummary(window, homedir());
 		if (!summary.trim()) return "会话无可分析内容";
 
 		// 熔断：本会话若是自我管理（正在执行 self-evolve 流程本身），直接跳过不发 LLM，避免自耗
@@ -277,6 +285,15 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 			return "熔断：自我管理会话，跳过采集";
 		}
 
+		// 隐私熔断：轨迹命中隐私路径模式 → 整场跳过采集（内容不外发给任何 LLM，宁可误杀不可放过）。
+		// 无条件生效：force 只绕过节流与 busy，不绕过隐私熔断。
+		if (touchesPrivateText(summary + "\n" + buildTraceText(window), privatePatterns(process.env.SE_PRIVATE_PATTERNS))) {
+			advanceCollection(state, shortName, entries);
+			writeState(state);
+			appendLog(`| ${nowLocal()} | ${shortName} | 熔断 | 轨迹命中隐私路径模式，跳过采集 | - |`);
+			return "熔断：轨迹涉及隐私内容，跳过采集";
+		}
+
 		// 更新统计（不满足条件也算分析过）
 		state.stats = state.stats ?? {};
 		state.stats.sessionsAnalyzed = (state.stats.sessionsAnalyzed ?? 0) + 1;
@@ -287,8 +304,7 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 			return `条件不满足（工具调用 ${toolCalls} 次、无错误），不值得调用 LLM`;
 		}
 
-		// 满足触发条件 → 调用 LLM 判断并草拟候选技能
-		// 解析采集模型链：只保留 registry 中真实存在的模型
+		// 满足触发条件 → 解析采集模型链（画像与技能采集共用）
 		const modelChain = COLLECTOR_MODEL_CHAIN.map((cfg) => ({
 			cfg,
 			model: ctx.modelRegistry.find(cfg.provider, cfg.id),
@@ -296,6 +312,234 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 		if (modelChain.length === 0) return "采集模型链全部不可用（models.json 中无匹配模型）";
 		if (!force) busy.set(sessionFile, "collecting");
 
+		try {
+			// 用户画像采集：与技能采集共用触发条件与采集点，独立调用，失败互不影响
+			let profileNote = "";
+			if (hasUser) {
+				try {
+					profileNote = await collectProfile(ctx, modelChain, state, shortName, summary, toolCalls, errors);
+				} catch (e) {
+					profileNote = `画像采集异常: ${String(e).slice(0, 150)}`;
+				}
+			}
+			const skillNote = await collectSkill(ctx, modelChain, state, sessionFile, shortName, entries, summary, toolCalls, errors);
+			return profileNote ? `${profileNote}\n${skillNote}` : skillNote;
+		} finally {
+			if (!force) busy.delete(sessionFile);
+		}
+	} catch (e) {
+		return `采集异常: ${String(e).slice(0, 200)}`;
+	}
+}
+
+/** 按模型链逐个尝试 LLM 调用：任一模型成功即用，全部失败才返回失败信息 */
+async function callModelChain(
+	ctx: any,
+	modelChain: { cfg: { provider: string; id: string }; model: any }[],
+	prompt: string,
+	maxTokens: number,
+): Promise<{ raw: string; stopReason: string; errorMessage: string }> {
+	let raw = "";
+	let stopReason = "unknown";
+	let errorMessage = "";
+	for (const { cfg, model } of modelChain) {
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		if (!auth?.ok || !auth.apiKey) {
+			errorMessage = `${cfg.provider}/${cfg.id}: 无法获取模型凭证`;
+			continue;
+		}
+		try {
+			const response = await complete(
+				model,
+				{
+					messages: [
+						{
+							role: "user",
+							content: [{ type: "text", text: prompt }],
+							timestamp: Date.now(),
+						},
+					],
+				},
+				{
+					apiKey: auth.apiKey,
+					headers: auth.headers,
+					env: auth.env,
+					reasoningEffort: "low", // 兼容「必须思考」型模型（minimal/off 会 400 [1210]）
+					maxTokens,
+					cacheRetention: "none",
+					sessionId: crypto.randomUUID(),
+					signal: ctx.signal,
+				},
+			);
+			const blocks = (response.content ?? []) as any[];
+			raw = blocks
+				.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.map((c) => c.text)
+				.join("")
+				.trim();
+			stopReason = (response as any).stopReason ?? "unknown";
+			errorMessage = ((response as any).errorMessage ?? "") as string;
+			if (stopReason !== "error" && raw) break; // 该模型成功，停止降级
+		} catch (e) {
+			errorMessage = `${cfg.provider}/${cfg.id}: ${String(e).slice(0, 150)}`;
+		}
+	}
+	return { raw, stopReason, errorMessage };
+}
+
+/**
+ * 用户画像采集：从轨迹摘要提炼持久画像草稿，写入 profiles/，待进化流程提炼进 USER.md。
+ * 与技能采集同触发条件、同采集点，独立 LLM 调用，任何失败都不影响技能采集。
+ * 提示词强制最小化 / 正向表述 / 禁举例 / 禁元信息；代码层机械校验条目格式与长度上限。
+ */
+async function collectProfile(
+	ctx: any,
+	modelChain: { cfg: { provider: string; id: string }; model: any }[],
+	state: any,
+	shortName: string,
+	summary: string,
+	toolCalls: number,
+	errors: number,
+): Promise<string> {
+	// 堆积上限：画像草稿过多说明进化久未触发，暂停采集并提示
+	let profileCount = 0;
+	try {
+		profileCount = existsSync(PROFILES_DIR)
+			? readdirSync(PROFILES_DIR, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".")).length
+			: 0;
+	} catch { /* ignore */ }
+	if (profileCount >= MAX_PROFILES) {
+		appendLog(`| ${nowLocal()} | ${shortName} | 画像暂停 | 画像区已满（${profileCount} 个），待进化流程提炼 | - |`);
+		return `画像区已满（${profileCount} 个），待进化流程提炼`;
+	}
+
+	const { raw, stopReason, errorMessage } = await callModelChain(
+		ctx,
+		modelChain,
+		buildProfilePrompt(summary),
+		MAX_PROFILE_OUTPUT_TOKENS,
+	);
+
+	state.stats = state.stats ?? {};
+	if (stopReason === "error" || !raw) {
+		const reason = errorMessage
+			? `画像采集失败（LLM 异常）: ${errorMessage.slice(0, 200)}`
+			: `画像采集失败：LLM 返回空内容（stopReason=${stopReason}）`;
+		state.stats.profilesFailed = (state.stats.profilesFailed ?? 0) + 1;
+		writeState(state);
+		appendLog(`| ${nowLocal()} | ${shortName} | 画像失败 | ${reason.slice(0, 100)} | - |`);
+		return `❌ ${reason}`;
+	}
+	if (stopReason === "length") {
+		const reason = `画像输出被截断（stopReason=length，maxTokens=${MAX_PROFILE_OUTPUT_TOKENS} 不足），丢弃残缺草稿`;
+		state.stats.profilesFailed = (state.stats.profilesFailed ?? 0) + 1;
+		writeState(state);
+		appendLog(`| ${nowLocal()} | ${shortName} | 画像失败 | ${reason.slice(0, 100)} | - |`);
+		return `❌ ${reason}`;
+	}
+	if (raw.startsWith("SKIP:")) {
+		const reason = raw.replace(/^SKIP:\s*/i, "").trim() || "无可提炼的持久画像信息";
+		appendLog(`| ${nowLocal()} | ${shortName} | 画像跳过 | ${reason.slice(0, 100)} | - |`);
+		return `画像跳过: ${reason}`;
+	}
+
+	// 清洗：剥代码块包裹
+	const rawClean = raw.replace(/```(?:ya?ml|markdown)?\s*/gi, "").trim();
+
+	// 代码层质量校验（最小化规范的机械保险丝）：
+	// ① 每个非空行必须以「- 」开头（无标题/元信息/解释文字）；② 总长 ≤ 上限
+	const items = rawClean.split("\n").map((l) => l.trim()).filter(Boolean);
+	if (items.length === 0 || items.some((l) => !l.startsWith("- "))) {
+		const reason = "画像草稿格式不符（应为「- 」条目列表，禁止标题/元信息/解释文字）";
+		state.stats.profilesRejected = (state.stats.profilesRejected ?? 0) + 1;
+		writeState(state);
+		appendLog(`| ${nowLocal()} | ${shortName} | 画像拒绝 | ${reason.slice(0, 100)} | - |`);
+		return `❌ ${reason}`;
+	}
+	if (rawClean.length > MAX_PROFILE_CHARS) {
+		const reason = `画像草稿超长（${rawClean.length} > ${MAX_PROFILE_CHARS} 字符，未遵守最小化约束）`;
+		state.stats.profilesRejected = (state.stats.profilesRejected ?? 0) + 1;
+		writeState(state);
+		appendLog(`| ${nowLocal()} | ${shortName} | 画像拒绝 | ${reason.slice(0, 100)} | - |`);
+		return `❌ ${reason}`;
+	}
+
+	// 落盘（slug 取自会话名；同内容去重，不同则以 -N 变体落盘，严禁静默覆盖）
+	const slug = slugify(shortName);
+	let finalSlug = slug;
+	let targetDir = join(PROFILES_DIR, finalSlug);
+	if (existsSync(join(targetDir, "profile.md"))) {
+		const existingRaw = readFileSync(join(targetDir, "profile.md"), "utf8");
+		if (existingRaw === rawClean + "\n") {
+			appendLog(`| ${nowLocal()} | ${shortName} | 画像跳过 | 与现有草稿 ${slug} 内容完全相同（重复采集） | - |`);
+			return `画像与现有草稿 ${slug} 相同，跳过`;
+		}
+		let v = 2;
+		while (existsSync(join(PROFILES_DIR, `${slug}-${v}`, "profile.md"))) v++;
+		finalSlug = `${slug}-${v}`;
+		targetDir = join(PROFILES_DIR, finalSlug);
+	}
+	mkdirSync(targetDir, { recursive: true });
+	writeFileSync(join(targetDir, "profile.md"), rawClean + "\n", "utf8");
+
+	// 记录来源
+	const meta = [
+		`---`,
+		`profile-source-session: ${shortName}`,
+		`profile-tool-calls: ${toolCalls}`,
+		`profile-errors: ${errors}`,
+		`profile-created: ${nowIso()}`,
+		`---`,
+	].join("\n");
+	writeFileSync(join(targetDir, "meta.md"), meta + "\n", "utf8");
+
+	state.stats.profilesCollected = (state.stats.profilesCollected ?? 0) + 1;
+	writeState(state);
+	appendLog(
+		`| ${nowLocal()} | ${shortName} | 画像采集 | 工具${toolCalls}次/错误${errors}次 → ${finalSlug} | profiles/${finalSlug}/ |`,
+	);
+	return `📸 已生成画像草稿: ${finalSlug}`;
+}
+
+/** 用户画像采集提示词：强制最小化 / 正向表述 / 禁举例 / 禁元信息 */
+function buildProfilePrompt(summary: string): string {
+	return [
+		"你是「agent-self-evolution」的用户画像采集器。根据下面这次任务的执行轨迹，提炼关于用户本人的持久画像信息（偏好、习惯、约束、背景）。",
+		"",
+		"采集规则（严格遵守）：",
+		"1. 只记录跨会话仍然成立的信息：稳定偏好、工作习惯、硬性约束、长期背景；",
+		"2. 一次性任务内容、临时状态、本会话细节：不记录；",
+		"3. 每条用一句话直接陈述事实，禁止举例，禁止解释理由，禁止添加来源、时间、编号、注释等任何元信息；",
+		"4. 用正向表述，避免否定句式（把「用户不用X」改写为其对应的行为约束）；",
+		`5. 语言与用户输入一致；全部条目总长 ≤ ${MAX_PROFILE_CHARS} 字符。`,
+		"",
+		"输出格式（严格遵守，不要输出其他内容）：",
+		"- 每条一行，以「- 」开头，不要空行，不要标题，不要代码块；",
+		"- 若轨迹中没有可提炼的持久画像信息，只输出一行，以 SKIP: 开头并说明原因。",
+		"",
+		"执行轨迹如下：",
+		"---",
+		summary,
+		"---",
+	].join("\n");
+}
+
+/**
+ * 技能候选采集（原 collect 内核）：判断是否值得沉淀并草拟 SKILL.md 候选。
+ * 失败/拒绝统一走 finalizeRejection，保证 state 与日志一致。
+ */
+async function collectSkill(
+	ctx: any,
+	modelChain: { cfg: { provider: string; id: string }; model: any }[],
+	state: any,
+	sessionFile: string,
+	shortName: string,
+	entries: any[],
+	summary: string,
+	toolCalls: number,
+	errors: number,
+): Promise<string> {
+	try {
 		// 查重：注入已启用技能清单，LLM 草拟前先比对，避免重复生成
 		const enabledSkills = listEnabledSkills();
 		const skillsBlock = enabledSkills.length
@@ -342,168 +586,117 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 			"---",
 		].join("\n");
 
-		try {
-			// 按模型链逐个尝试：任一模型成功即用，全部失败才记采集失败
-			let raw = "";
-			let stopReason = "unknown";
-			let errorMessage = "";
-			for (const { cfg, model } of modelChain) {
-				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-				if (!auth?.ok || !auth.apiKey) {
-					errorMessage = `${cfg.provider}/${cfg.id}: 无法获取模型凭证`;
-					continue;
-				}
-				try {
-					const response = await complete(
-						model,
-						{
-							messages: [
-								{
-									role: "user",
-									content: [{ type: "text", text: prompt }],
-									timestamp: Date.now(),
-								},
-							],
-						},
-						{
-							apiKey: auth.apiKey,
-							headers: auth.headers,
-							env: auth.env,
-							reasoningEffort: "low", // 兼容「必须思考」型模型（minimal/off 会 400 [1210]）
-							maxTokens: MAX_OUTPUT_TOKENS,
-							cacheRetention: "none",
-							sessionId: crypto.randomUUID(),
-							signal: ctx.signal,
-						},
-					);
-					const blocks = (response.content ?? []) as any[];
-					raw = blocks
-						.filter((c): c is { type: "text"; text: string } => c.type === "text")
-						.map((c) => c.text)
-						.join("")
-						.trim();
-					stopReason = (response as any).stopReason ?? "unknown";
-					errorMessage = ((response as any).errorMessage ?? "") as string;
-					if (stopReason !== "error" && raw) break; // 该模型成功，停止降级
-				} catch (e) {
-					errorMessage = `${cfg.provider}/${cfg.id}: ${String(e).slice(0, 150)}`;
-				}
-			}
+		const { raw, stopReason, errorMessage } = await callModelChain(ctx, modelChain, prompt, MAX_OUTPUT_TOKENS);
 
-			// LLM 调用失败或空输出（模型链全部尝试完毕）→ 记录真实原因
-			if (stopReason === "error" || !raw) {
-				const reason = errorMessage
-					? `LLM 调用失败: ${errorMessage.slice(0, 200)}`
-					: `LLM 返回空内容（stopReason=${stopReason}），maxTokens=${MAX_OUTPUT_TOKENS} 可能不足`;
-				finalizeRejection(state, sessionFile, shortName, entries, reason, "采集失败");
-				return `❌ ${reason}`;
-			}
-
-			// 截断防护：stopReason=length 表示输出被 maxTokens 剪断。
-			// 此前只拦截 error 不拦截 length，残缺草稿会混入候选区（LESSONS 2026-08-17 根因修复）。
-			if (stopReason === "length") {
-				const reason = `LLM 输出被截断（stopReason=length，maxTokens=${MAX_OUTPUT_TOKENS} 不足），丢弃残缺草稿`;
-				finalizeRejection(state, sessionFile, shortName, entries, reason, "采集失败");
-				return `❌ ${reason}`;
-			}
-
-			// SKIP 判定必须在格式校验之前：SKIP 响应首行不是 ---，否则会被误判为格式错误
-			if (raw.startsWith("SKIP:")) {
-				const reason = raw.replace(/^SKIP:\s*/i, "").trim() || "未提供原因";
-				// 记录同会话拒绝记忆，供后续增量采集注入提示词抑制判断抖动
-				state.sessionRejections = {
-					...(state.sessionRejections ?? {}),
-					[shortName]: { at: nowIso(), reason: reason.slice(0, 200) },
-				};
-				finalizeRejection(state, sessionFile, shortName, entries, reason);
-				return `拒绝沉淀: ${reason}`;
-			}
-
-			// 统一清洗（供格式校验与 name 提取共用）：剥代码块包裹
-			const rawClean = raw.replace(/```(?:ya?ml|markdown)?\s*/gi, "").trim();
-
-			// 代码层质量校验（LLM 未遵守输出规则时的保险丝）：
-			// ① 首行必须是 ---（frontmatter 存在）；② 总长 ≤ MAX_SKILL_CHARS
-			if (rawClean.split("\n", 1)[0].trim() !== "---") {
-				const reason = "草稿缺少 frontmatter（首行非 ---，格式不符）";
-				finalizeRejection(state, sessionFile, shortName, entries, reason);
-				return `❌ ${reason}`;
-			}
-			if (raw.length > MAX_SKILL_CHARS) {
-				const reason = `草稿超长（${raw.length} > ${MAX_SKILL_CHARS} 字符，未遵守输出约束）`;
-				finalizeRejection(state, sessionFile, shortName, entries, reason);
-				return `❌ ${reason}`;
-			}
-
-			// 提取 name 作为 slug（宽容匹配：容忍引号、冒号前空格、字段顺序、代码块包裹）
-			const nameMatch = rawClean.match(/^name\s*:\s*["']?([^"'\r\n]+)["']?\s*$/m);
-			const name = nameMatch ? nameMatch[1].trim() : "";
-			const slug = slugify(name || "untitled-skill");
-			if (!name) {
-				const reason = "LLM 草稿缺少合法 name（frontmatter 格式不符）";
-				finalizeRejection(state, sessionFile, shortName, entries, reason);
-				return `❌ ${reason}`;
-			}
-
-			// 代码层查重：slug 与已启用技能完全同名 → 拒绝（LLM 未遵守查重规则的保险丝）
-			if (enabledSkills.some((s) => s.name === slug)) {
-				const reason = `与已启用技能 ${slug} 完全同名（查重拦截，LLM 未遵守查重规则）`;
-				finalizeRejection(state, sessionFile, shortName, entries, reason);
-				return `❌ ${reason}`;
-			}
-
-			// 候选同名处理（多会话 slug 撞名防线）：
-			// 内容完全相同 → 视为重复采集直接拒绝；内容不同 → 变体后缀落盘，严禁静默覆盖
-			let finalSlug = slug;
-			let targetDir = join(CANDIDATES_DIR, finalSlug);
-			if (existsSync(join(targetDir, "SKILL.md"))) {
-				const existingRaw = readFileSync(join(targetDir, "SKILL.md"), "utf8");
-				if (existingRaw === raw) {
-					const reason = `与现有候选 ${slug} 内容完全相同（重复采集）`;
-					finalizeRejection(state, sessionFile, shortName, entries, reason);
-					return `❌ ${reason}`;
-				}
-				let v = 2;
-				while (existsSync(join(CANDIDATES_DIR, `${slug}-${v}`, "SKILL.md"))) v++;
-				finalSlug = `${slug}-${v}`;
-				targetDir = join(CANDIDATES_DIR, finalSlug);
-			}
-			mkdirSync(targetDir, { recursive: true });
-			writeFileSync(join(targetDir, "SKILL.md"), raw, "utf8");
-
-			// 记录来源
-			const meta = [
-				`---`,
-				`candidate-source-session: ${sessionFile.split("/").pop()}`,
-				`candidate-tool-calls: ${toolCalls}`,
-				`candidate-errors: ${errors}`,
-				`candidate-created: ${nowIso()}`,
-				`---`,
-			].join("\n");
-			writeFileSync(join(targetDir, "meta.md"), meta + "\n", "utf8");
-
-			// 更新统计与日志；候选已生成，清除本会话的拒绝记忆
-			if (state.sessionRejections) {
-				delete state.sessionRejections[shortName];
-				if (Object.keys(state.sessionRejections).length === 0) delete state.sessionRejections;
-			}
-			state.stats.candidatesCreated = (state.stats.candidatesCreated ?? 0) + 1;
-			state.lastCollectionAt = nowIso();
-			advanceCollection(state, shortName, entries);
-			writeState(state);
-			appendLog(
-				`| ${nowLocal()} | ${sessionFile.split("/").pop()} | 候选生成 | 工具${toolCalls}次/错误${errors}次 → ${finalSlug} | candidates/${finalSlug}/ |`,
-			);
-			return `🎉 已生成候选技能: ${finalSlug}（工具${toolCalls}次/错误${errors}次）`;
-		} catch (e) {
-			const reason = `LLM 调用异常: ${String(e).slice(0, 200)}`;
+		// LLM 调用失败或空输出（模型链全部尝试完毕）→ 记录真实原因
+		if (stopReason === "error" || !raw) {
+			const reason = errorMessage
+				? `LLM 调用失败: ${errorMessage.slice(0, 200)}`
+				: `LLM 返回空内容（stopReason=${stopReason}），maxTokens=${MAX_OUTPUT_TOKENS} 可能不足`;
 			finalizeRejection(state, sessionFile, shortName, entries, reason, "采集失败");
 			return `❌ ${reason}`;
-		} finally {
-			if (!force) busy.delete(sessionFile);
 		}
+
+		// 截断防护：stopReason=length 表示输出被 maxTokens 剪断。
+		// 此前只拦截 error 不拦截 length，残缺草稿会混入候选区（LESSONS 2026-08-17 根因修复）。
+		if (stopReason === "length") {
+			const reason = `LLM 输出被截断（stopReason=length，maxTokens=${MAX_OUTPUT_TOKENS} 不足），丢弃残缺草稿`;
+			finalizeRejection(state, sessionFile, shortName, entries, reason, "采集失败");
+			return `❌ ${reason}`;
+		}
+
+		// SKIP 判定必须在格式校验之前：SKIP 响应首行不是 ---，否则会被误判为格式错误
+		if (raw.startsWith("SKIP:")) {
+			const reason = raw.replace(/^SKIP:\s*/i, "").trim() || "未提供原因";
+			// 记录同会话拒绝记忆，供后续增量采集注入提示词抑制判断抖动
+			state.sessionRejections = {
+				...(state.sessionRejections ?? {}),
+				[shortName]: { at: nowIso(), reason: reason.slice(0, 200) },
+			};
+			finalizeRejection(state, sessionFile, shortName, entries, reason);
+			return `拒绝沉淀: ${reason}`;
+		}
+
+		// 统一清洗（供格式校验与 name 提取共用）：剥代码块包裹
+		const rawClean = raw.replace(/```(?:ya?ml|markdown)?\s*/gi, "").trim();
+
+		// 代码层质量校验（LLM 未遵守输出规则时的保险丝）：
+		// ① 首行必须是 ---（frontmatter 存在）；② 总长 ≤ MAX_SKILL_CHARS
+		if (rawClean.split("\n", 1)[0].trim() !== "---") {
+			const reason = "草稿缺少 frontmatter（首行非 ---，格式不符）";
+			finalizeRejection(state, sessionFile, shortName, entries, reason);
+			return `❌ ${reason}`;
+		}
+		if (raw.length > MAX_SKILL_CHARS) {
+			const reason = `草稿超长（${raw.length} > ${MAX_SKILL_CHARS} 字符，未遵守输出约束）`;
+			finalizeRejection(state, sessionFile, shortName, entries, reason);
+			return `❌ ${reason}`;
+		}
+
+		// 提取 name 作为 slug（宽容匹配：容忍引号、冒号前空格、字段顺序、代码块包裹）
+		const nameMatch = rawClean.match(/^name\s*:\s*["']?([^"'\r\n]+)["']?\s*$/m);
+		const name = nameMatch ? nameMatch[1].trim() : "";
+		const slug = slugify(name || "untitled-skill");
+		if (!name) {
+			const reason = "LLM 草稿缺少合法 name（frontmatter 格式不符）";
+			finalizeRejection(state, sessionFile, shortName, entries, reason);
+			return `❌ ${reason}`;
+		}
+
+		// 代码层查重：slug 与已启用技能完全同名 → 拒绝（LLM 未遵守查重规则的保险丝）
+		if (enabledSkills.some((s) => s.name === slug)) {
+			const reason = `与已启用技能 ${slug} 完全同名（查重拦截，LLM 未遵守查重规则）`;
+			finalizeRejection(state, sessionFile, shortName, entries, reason);
+			return `❌ ${reason}`;
+		}
+
+		// 候选同名处理（多会话 slug 撞名防线）：
+		// 内容完全相同 → 视为重复采集直接拒绝；内容不同 → 变体后缀落盘，严禁静默覆盖
+		let finalSlug = slug;
+		let targetDir = join(CANDIDATES_DIR, finalSlug);
+		if (existsSync(join(targetDir, "SKILL.md"))) {
+			const existingRaw = readFileSync(join(targetDir, "SKILL.md"), "utf8");
+			if (existingRaw === raw) {
+				const reason = `与现有候选 ${slug} 内容完全相同（重复采集）`;
+				finalizeRejection(state, sessionFile, shortName, entries, reason);
+				return `❌ ${reason}`;
+			}
+			let v = 2;
+			while (existsSync(join(CANDIDATES_DIR, `${slug}-${v}`, "SKILL.md"))) v++;
+			finalSlug = `${slug}-${v}`;
+			targetDir = join(CANDIDATES_DIR, finalSlug);
+		}
+		mkdirSync(targetDir, { recursive: true });
+		writeFileSync(join(targetDir, "SKILL.md"), raw, "utf8");
+
+		// 记录来源
+		const meta = [
+			`---`,
+			`candidate-source-session: ${sessionFile.split("/").pop()}`,
+			`candidate-tool-calls: ${toolCalls}`,
+			`candidate-errors: ${errors}`,
+			`candidate-created: ${nowIso()}`,
+			`---`,
+		].join("\n");
+		writeFileSync(join(targetDir, "meta.md"), meta + "\n", "utf8");
+
+		// 更新统计与日志；候选已生成，清除本会话的拒绝记忆
+		if (state.sessionRejections) {
+			delete state.sessionRejections[shortName];
+			if (Object.keys(state.sessionRejections).length === 0) delete state.sessionRejections;
+		}
+		state.stats.candidatesCreated = (state.stats.candidatesCreated ?? 0) + 1;
+		state.lastCollectionAt = nowIso();
+		advanceCollection(state, shortName, entries);
+		writeState(state);
+		appendLog(
+			`| ${nowLocal()} | ${sessionFile.split("/").pop()} | 候选生成 | 工具${toolCalls}次/错误${errors}次 → ${finalSlug} | candidates/${finalSlug}/ |`,
+		);
+		return `🎉 已生成候选技能: ${finalSlug}（工具${toolCalls}次/错误${errors}次）`;
 	} catch (e) {
-		return `采集异常: ${String(e).slice(0, 200)}`;
+		const reason = `LLM 调用异常: ${String(e).slice(0, 200)}`;
+		finalizeRejection(state, sessionFile, shortName, entries, reason, "采集失败");
+		return `❌ ${reason}`;
 	}
 }
 

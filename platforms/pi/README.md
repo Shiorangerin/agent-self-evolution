@@ -4,7 +4,7 @@ Pi 平台通过两个扩展 + 一个技能接入 agent-self-evolution：
 
 | 组件 | 作用 |
 | --- | --- |
-| `extensions/self-evolve.ts` | 经验采集器：每次任务结束（`agent_settled`）后台分析轨迹，满足条件时用低成本 LLM 调用草拟 SKILL.md 候选，写入 `$SE_ROOT/candidates/` |
+| `extensions/self-evolve.ts` | 经验采集器：每次任务结束（`agent_settled`）后台分析轨迹，满足条件时用低成本 LLM 并行发起两路独立采集（失败互不影响）：① 技能候选 → `$SE_ROOT/candidates/`；② 用户画像草稿 → `$SE_ROOT/profiles/` |
 | `extensions/skill-usage.ts` | 技能使用统计：纯规则扫描轨迹，记录技能使用信号到 `$SE_ROOT/usage.json`，供进化流程做「长期未使用技能」体检 |
 | `skills/self-evolve/SKILL.md` | 进化流程说明书：用户说「总结一天的工作」/「进化」时，指导 agent 执行候选审查、技能更新、记忆维护、git 提交 |
 

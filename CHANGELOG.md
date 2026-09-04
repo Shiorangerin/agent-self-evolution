@@ -2,6 +2,22 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。版本号从公开发布版开始记起。
 
+## [0.4.0] - 2026-09-04
+
+### 新增
+- **用户画像采集（双路采集）**：满足触发条件时，采集器在技能候选之外独立发起一路 LLM 调用（失败互不影响），从轨迹提炼跨会话成立的持久画像草稿，写入 `$SE_ROOT/profiles/<会话名>/`（`profile.md` + `meta.md`，与候选区同结构：同内容去重、撞名 `-N` 变体、堆积上限 `SE_MAX_PROFILES`）。
+- **画像采集提示词最小化规范**：只记录稳定偏好/习惯/硬性约束/长期背景；每条一句话直接陈述；正向表述优先避免否定句式；禁止任何举例；禁止任何元信息；总长 ≤600 字符（`SE_MAX_PROFILE_CHARS` 可调）；无信号则 SKIP。代码层机械保险丝：条目必须全部为「- 」列表、超长拒绝。
+- **进化提炼流程**（三平台同步）：进化流程第四步改为读取 `profiles/` 全部草稿 → 与现有 `USER.md` 融合（矛盾以较新为准、语义重复丢弃）→ 按同一套最小化规范写入 → 已处理草稿归档到 `logs/archive/profiles-YYYY-MM/`。
+- **Claude Code 画像注入**：install.sh 幂等地在全局 `~/.claude/CLAUDE.md` 追加 `@<SE_ROOT>/memory/USER.md` 绝对路径引用，进化更新 USER.md 后下次会话自动生效；同时修正平台流程文档中失效的相对路径 `@` 引用说明。
+
+### 变更
+- 隐私护栏（通用脱敏，不涉及任何具体用户信息）：轨迹摘要外发前家目录绝对路径统一替换为 `~`（Pi 侧 `sanitizeTraceText` 纯函数 + Python 侧 `sanitize_text`）；隐私熔断：轨迹命中隐私路径模式（diary/.env/SSH 密钥/证书/凭证/钱包等通用词表，`SE_PRIVATE_PATTERNS` 可覆盖）的会话整场跳过采集，内容不外发给任何 LLM，`--force` 也不绕过。
+- Pi 采集器重构：LLM 模型链调用抽为共享 `callModelChain`；技能流程抽为 `collectSkill`；画像采集为独立 `collectProfile`；`buildTraceSummary` 返回 `hasUser`（画像采集门槛）并支持家目录脱敏。
+- state.json 模板新增画像计数（profilesCollected / profilesRejected / profilesFailed）；数据目录新增 `profiles/`。
+
+### 测试
+- evolution-core 单元测试新增脱敏 / 隐私模式 / hasUser 用例（23 → 31 个）。
+
 ## [0.3.0] - 2026-08-21
 
 ### 新增

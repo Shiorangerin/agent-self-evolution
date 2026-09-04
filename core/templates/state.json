@@ -5,6 +5,9 @@
   "stats": {
     "sessionsAnalyzed": 0,
     "candidatesCreated": 0,
+    "profilesCollected": 0,
+    "profilesRejected": 0,
+    "profilesFailed": 0,
     "skillsEnabled": 0,
     "skillsUpdated": 0,
     "candidatesRejected": 0,

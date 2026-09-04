@@ -5,11 +5,14 @@ agent-self-evolution — 经验采集器（平台无关核心）
 每次 agent 运行结束（由各平台适配器的 hook 触发）时，后台轻量分析本次会话轨迹：
 - 统计工具调用次数、错误修复次数
 - 满足触发条件（工具调用 ≥5 次 / 出现错误并修复）时，
-  用低成本 LLM 调用草拟一份 SKILL.md 候选，写入 <SE_ROOT>/candidates/
-- 候选区不进入运行上下文，待用户手动触发「进化流程」时审查启用
+  用低成本 LLM 并行发起两路独立采集（失败互不影响）：
+  ① 草拟一份 SKILL.md 候选，写入 <SE_ROOT>/candidates/
+  ② 提炼用户画像草稿，写入 <SE_ROOT>/profiles/（待进化流程提炼进 USER.md）
+- 候选区与画像区都不进入运行上下文，待用户手动触发「进化流程」时审查 / 提炼
 
 设计原则：
-- 采集完全被动：本脚本只负责安静地记录候选，不做任何自动唤醒 / 定时触发。
+- 采集完全被动：本脚本只负责安静地记录候选与画像草稿，不做任何自动唤醒 / 定时触发。
+- 隐私优先：轨迹摘要外发前家目录统一脱敏为 ~；命中隐私路径模式的会话整场熔断（宁可误杀不可放过）。
 - 增量采集：同一会话可多次采集，每次只分析上次采集点之后的新内容（按 transcript 行数记录），
   长程对话也不漏；被节流挡住的只会延迟、不会丢失。
 - 省 token：轨迹摘要截断、低推理强度、输出预算受限；所有失败静默处理并记录原因。
@@ -56,9 +59,22 @@ MAX_OUTPUT_TOKENS = int(os.environ.get("SE_MAX_OUTPUT_TOKENS", "2000"))
 THROTTLE_MS = int(os.environ.get("SE_THROTTLE_MS", "0"))          # 默认关闭节流（增量采集不丢数据）
 MAX_SKILL_CHARS = int(os.environ.get("SE_MAX_SKILL_CHARS", "8000"))  # 草稿长度上限（放宽以容纳知识密集技能）
 
+# 用户画像采集
+PROFILES_DIR = SE_ROOT / "profiles"
+MAX_PROFILES = int(os.environ.get("SE_MAX_PROFILES", "20"))       # 画像草稿堆积上限
+MAX_PROFILE_CHARS = int(os.environ.get("SE_MAX_PROFILE_CHARS", "600"))  # 画像草稿长度上限（强制最小化）
+MAX_PROFILE_OUTPUT_TOKENS = int(os.environ.get("SE_MAX_PROFILE_OUTPUT_TOKENS", "1024"))
+
 # 自我管理会话熔断词表：进化流程执行期间的会话不值得自我沉淀（防自耗）
 SELF_MGMT_TRIGGERS = ["进化", "自我进化", "技能候选", "沉淀技能", "进化一下", "审查候选", "技能体检"]
 SELF_MGMT_PATHS = ["candidates", "skills/", "state.json", "usage.json", "experience-log"]
+
+# 隐私路径模式（通用词表，与具体用户无关）：文件名命中即视为私密内容，
+# 该会话整体跳过采集（不外发给任何 LLM）。可用环境变量 SE_PRIVATE_PATTERNS（逗号分隔）覆盖。
+DEFAULT_PRIVATE_PATTERNS = [
+    "diary", ".env", "id_rsa", "id_ed25519", ".pem", "credential",
+    "password", "passwd", "wallet", "private_key", "privatekey", "secrets.",
+]
 
 # ---------------------------------------------------------------------------
 # 工具函数
@@ -78,6 +94,28 @@ def slugify(name: str) -> str:
     slug = re.sub(r"^-+|-+$", "", slug)
     slug = re.sub(r"-{2,}", "-", slug)
     return slug[:60] or "untitled-skill"
+
+
+def sanitize_text(text: str) -> str:
+    """通用脱敏：家目录绝对路径统一替换为 ~（轨迹摘要会外发给低成本采集模型）。"""
+    home = str(Path.home())
+    if not text or not home:
+        return text
+    return text.replace(home, "~")
+
+
+def private_patterns() -> list:
+    env = os.environ.get("SE_PRIVATE_PATTERNS", "")
+    from_env = [s.strip().lower() for s in env.split(",") if s.strip()]
+    return from_env or list(DEFAULT_PRIVATE_PATTERNS)
+
+
+def touches_private(text: str) -> bool:
+    """隐私熔断检测：命中任一隐私路径模式 → 会话整体跳过采集（宁可误杀不可放过）。"""
+    if not text:
+        return False
+    lower = text.lower()
+    return any(p and p.lower() in lower for p in private_patterns())
 
 
 def read_state() -> dict:
@@ -216,7 +254,7 @@ def parse_transcript(path: str, offset: int = 0) -> tuple:
         lines_out.append("【执行操作】\n" + "\n".join(bash_parts[-25:]))
     if error_parts:
         lines_out.append("【出现的错误】\n" + "\n---\n".join(error_parts[-3:]))
-    summary = "\n\n".join(lines_out)[:MAX_TRACE_CHARS]
+    summary = sanitize_text("\n\n".join(lines_out))[:MAX_TRACE_CHARS]
     return len(lines), user_parts, tool_calls, errors, summary, self_mgmt
 
 
@@ -264,7 +302,30 @@ def build_prompt(summary: str, tool_calls: int, errors: int, prev_rejection: dic
     ])
 
 
-def call_llm(prompt: str) -> str:
+def build_profile_prompt(summary: str) -> str:
+    """用户画像采集提示词：强制最小化 / 正向表述 / 禁举例 / 禁元信息。"""
+    return "\n".join([
+        "你是「agent-self-evolution」的用户画像采集器。根据下面这次任务的执行轨迹，提炼关于用户本人的持久画像信息（偏好、习惯、约束、背景）。",
+        "",
+        "采集规则（严格遵守）：",
+        "1. 只记录跨会话仍然成立的信息：稳定偏好、工作习惯、硬性约束、长期背景；",
+        "2. 一次性任务内容、临时状态、本会话细节：不记录；",
+        "3. 每条用一句话直接陈述事实，禁止举例，禁止解释理由，禁止添加来源、时间、编号、注释等任何元信息；",
+        "4. 用正向表述，避免否定句式（把「用户不用X」改写为其对应的行为约束）；",
+        "5. 语言与用户输入一致；全部条目总长 ≤ " + str(MAX_PROFILE_CHARS) + " 字符。",
+        "",
+        "输出格式（严格遵守，不要输出其他内容）：",
+        "- 每条一行，以「- 」开头，不要空行，不要标题，不要代码块；",
+        "- 若轨迹中没有可提炼的持久画像信息，只输出一行，以 SKIP: 开头并说明原因。",
+        "",
+        "执行轨迹如下：",
+        "---",
+        summary,
+        "---",
+    ])
+
+
+def call_llm(prompt: str, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
     """按优先级调用 LLM 后端，返回原始输出文本。"""
     env = os.environ
 
@@ -306,7 +367,7 @@ def call_llm(prompt: str) -> str:
         body = json.dumps({
             "model": api_model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": MAX_OUTPUT_TOKENS,
+            "max_tokens": max_tokens,
         }).encode("utf-8")
         req = urllib.request.Request(
             api_base.rstrip("/") + "/chat/completions",
@@ -362,11 +423,13 @@ def collect(transcript: str, session: str, offset: int = None,
 
     # 解析轨迹（未显式传参时）
     self_mgmt = False
+    user_present = True  # 显式传入 summary 时无法判断是否有用户消息，默认尝试
     if summary is None or tool_calls is None or errors is None:
-        offset, _, tc, er, sm, self_mgmt = parse_transcript(transcript, offset)
+        offset, user_parts, tc, er, sm, self_mgmt = parse_transcript(transcript, offset)
         tool_calls = tool_calls if tool_calls is not None else tc
         errors = errors if errors is not None else er
         summary = sm if summary is None else summary
+        user_present = bool(user_parts)
     if not summary or not summary.strip():
         return "会话无可分析内容"
 
@@ -377,6 +440,14 @@ def collect(transcript: str, session: str, offset: int = None,
         append_log(f"| {now_local()} | {session} | 熔断 | 自我管理会话（执行进化流程本身），跳过采集不发 LLM | - |")
         return "熔断：自我管理会话，跳过采集"
 
+    # 隐私熔断：轨迹命中隐私路径模式 → 整场跳过采集（内容不外发给任何 LLM，宁可误杀不可放过）。
+    # 无条件生效：force 只绕过节流与 busy，不绕过隐私熔断。
+    if touches_private(summary):
+        _advance(state, session, offset, transcript)
+        write_state(state)
+        append_log(f"| {now_local()} | {session} | 熔断 | 轨迹命中隐私路径模式，跳过采集 | - |")
+        return "熔断：轨迹涉及隐私内容，跳过采集"
+
     state["stats"]["sessionsAnalyzed"] = state["stats"].get("sessionsAnalyzed", 0) + 1
 
     # 触发条件
@@ -385,124 +456,136 @@ def collect(transcript: str, session: str, offset: int = None,
         write_state(state)
         return f"条件不满足（工具调用 {tool_calls} 次、无错误），不值得调用 LLM"
 
-    # 草拟候选（注入同会话拒绝记忆，抑制「先拒后生」的判断抖动）
-    prev_rej = (state.get("sessionRejections") or {}).get(session)
-    prompt = build_prompt(summary, tool_calls, errors, prev_rej)
-    try:
-        raw = call_llm(prompt)
-    except Exception as e:
-        # 暂时性失败（后端缺失/网络/超时）：不推进采集点，修复后可重试补采
-        reason = f"LLM 调用异常: {str(e)[:200]}"
-        state["stats"]["candidatesRejected"] = state["stats"].get("candidatesRejected", 0) + 1
-        state["lastCollectionAt"] = now_iso()
-        record_rejection(state, session, reason)
-        write_state(state)
-        append_log(f"| {now_local()} | {session} | 采集失败 | {reason[:100]} | - |")
-        return f"❌ {reason}"
+    def _collect_skill() -> str:
+        # 草拟候选（注入同会话拒绝记忆，抑制「先拒后生」的判断抖动）
+        prev_rej = (state.get("sessionRejections") or {}).get(session)
+        prompt = build_prompt(summary, tool_calls, errors, prev_rej)
+        try:
+            raw = call_llm(prompt)
+        except Exception as e:
+            # 暂时性失败（后端缺失/网络/超时）：不推进采集点，修复后可重试补采
+            reason = f"LLM 调用异常: {str(e)[:200]}"
+            state["stats"]["candidatesRejected"] = state["stats"].get("candidatesRejected", 0) + 1
+            state["lastCollectionAt"] = now_iso()
+            record_rejection(state, session, reason)
+            write_state(state)
+            append_log(f"| {now_local()} | {session} | 采集失败 | {reason[:100]} | - |")
+            return f"❌ {reason}"
 
-    if not raw:
-        # 暂时性失败：不推进采集点，可重试
-        reason = "LLM 返回空内容"
-        state["stats"]["candidatesRejected"] = state["stats"].get("candidatesRejected", 0) + 1
-        state["lastCollectionAt"] = now_iso()
-        record_rejection(state, session, reason)
-        write_state(state)
-        append_log(f"| {now_local()} | {session} | 采集失败 | {reason} | - |")
-        return f"❌ {reason}"
+        if not raw:
+            # 暂时性失败：不推进采集点，可重试
+            reason = "LLM 返回空内容"
+            state["stats"]["candidatesRejected"] = state["stats"].get("candidatesRejected", 0) + 1
+            state["lastCollectionAt"] = now_iso()
+            record_rejection(state, session, reason)
+            write_state(state)
+            append_log(f"| {now_local()} | {session} | 采集失败 | {reason} | - |")
+            return f"❌ {reason}"
 
-    # 统一拒绝收尾（所有不写入候选的出口都走这里，保证 state 与日志一致）
-    def reject(reason: str) -> str:
-        state["stats"]["candidatesRejected"] = state["stats"].get("candidatesRejected", 0) + 1
+        # 统一拒绝收尾（所有不写入候选的出口都走这里，保证 state 与日志一致）
+        def reject(reason: str) -> str:
+            state["stats"]["candidatesRejected"] = state["stats"].get("candidatesRejected", 0) + 1
+            state["lastCollectionAt"] = now_iso()
+            record_rejection(state, session, reason)
+            _advance(state, session, offset, transcript)
+            write_state(state)
+            append_log(f"| {now_local()} | {session} | 拒绝沉淀 | {reason[:100]} | - |")
+            return f"❌ {reason}"
+
+        # SKIP 判定必须在格式校验之前：SKIP 响应首行不是 ---，否则会被误判为格式错误。
+        # 同时记录同会话拒绝记忆，供后续增量采集注入提示词抑制判断抖动。
+        if raw.startswith("SKIP:"):
+            reason = raw[5:].strip() or "未提供原因"
+            rej_map = state.setdefault("sessionRejections", {})
+            rej_map[session] = {"at": now_iso(), "reason": reason[:200]}
+            reject(reason)
+            return f"拒绝沉淀: {reason}"
+
+        # 截断防护：CLI 后端无 stopReason 可查，用启发式拦截残缺草稿——
+        # ① 代码围栏不闭合（奇数个 ```）；② 尾部中断于标点。任一命中即丢弃，不入候选区。
+        if raw.count("```") % 2 == 1:
+            return reject("LLM 输出疑似截断（代码围栏不闭合），丢弃残缺草稿")
+        nonempty = [l.rstrip() for l in raw.splitlines() if l.strip()]
+        trunc_tails = ("→", "：", ":", "、", "，", "；", "-", "|", "*", "(", "（", "【", "《", "…")
+        ok_tails = ("。", "）", ")", "」", "】", "》", '"', "`")
+        if nonempty:
+            last = nonempty[-1]
+            if last.endswith(trunc_tails) and not last.endswith(ok_tails):
+                return reject(f"LLM 输出疑似截断（尾部中断于『{last[-12:]}』），丢弃残缺草稿")
+
+        # 清洗（供格式校验与 name 提取共用）：剥代码块包裹
+        raw_clean = re.sub(r"```(?:ya?ml|markdown)?\s*", "", raw).strip()
+
+        # 代码层质量校验（LLM 未遵守输出规则时的保险丝）
+        if raw_clean.split("\n", 1)[0].strip() != "---":
+            return reject("草稿缺少 frontmatter（首行非 ---，格式不符）")
+        if len(raw) > MAX_SKILL_CHARS:
+            return reject(f"草稿超长（{len(raw)} > {MAX_SKILL_CHARS} 字符，未遵守输出约束）")
+
+        # 解析 name
+        name_m = re.search(r"^name\s*:\s*[\"']?([^\"'\r\n]+)[\"']?\s*$", raw_clean, re.M)
+        name = name_m.group(1).strip() if name_m else ""
+        slug = slugify(name or "untitled-skill")
+
+        if not name:
+            return reject("LLM 草稿缺少合法 name（frontmatter 格式不符）")
+
+        # 代码层查重保险丝
+        if any(s["name"] == slug for s in list_enabled_skills()):
+            return reject(f"与已启用技能 {slug} 完全同名（查重拦截，LLM 未遵守查重规则）")
+
+        # 写入候选（同名防覆盖：内容相同视为重复采集；不同则以 -N 变体落盘）
+        final_slug = slug
+        target = CANDIDATES_DIR / final_slug
+        if (target / "SKILL.md").exists():
+            existing = (target / "SKILL.md").read_text(encoding="utf-8")
+            if existing == raw:
+                return reject(f"与现有候选 {slug} 内容完全相同（重复采集）")
+            v = 2
+            while (CANDIDATES_DIR / f"{slug}-{v}" / "SKILL.md").exists():
+                v += 1
+            final_slug = f"{slug}-{v}"
+            target = CANDIDATES_DIR / final_slug
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "SKILL.md").write_text(raw, encoding="utf-8")
+            (target / "meta.md").write_text(
+                "\n".join([
+                    "---",
+                    f"candidate-source-session: {session}",
+                    f"candidate-tool-calls: {tool_calls}",
+                    f"candidate-errors: {errors}",
+                    f"candidate-created: {now_iso()}",
+                    "---",
+                    "",
+                ]), encoding="utf-8",
+            )
+        except Exception as e:
+            return f"❌ 写入候选失败: {str(e)[:200]}"
+
+        # 候选已生成，清除本会话的拒绝记忆
+        if state.get("sessionRejections"):
+            state["sessionRejections"].pop(session, None)
+            if not state["sessionRejections"]:
+                state.pop("sessionRejections", None)
+
+        state["stats"]["candidatesCreated"] = state["stats"].get("candidatesCreated", 0) + 1
         state["lastCollectionAt"] = now_iso()
-        record_rejection(state, session, reason)
         _advance(state, session, offset, transcript)
         write_state(state)
-        append_log(f"| {now_local()} | {session} | 拒绝沉淀 | {reason[:100]} | - |")
-        return f"❌ {reason}"
+        append_log(f"| {now_local()} | {session} | 候选生成 | 工具{tool_calls}次/错误{errors}次 → {final_slug} | candidates/{final_slug}/ |")
+        return f"🎉 已生成候选技能: {final_slug}（工具{tool_calls}次/错误{errors}次）"
 
-    # SKIP 判定必须在格式校验之前：SKIP 响应首行不是 ---，否则会被误判为格式错误。
-    # 同时记录同会话拒绝记忆，供后续增量采集注入提示词抑制判断抖动。
-    if raw.startswith("SKIP:"):
-        reason = raw[5:].strip() or "未提供原因"
-        rej_map = state.setdefault("sessionRejections", {})
-        rej_map[session] = {"at": now_iso(), "reason": reason[:200]}
-        reject(reason)
-        return f"拒绝沉淀: {reason}"
+    # 用户画像采集：与技能采集共用触发条件与采集点，独立调用，失败互不影响
+    profile_note = ""
+    if user_present:
+        try:
+            profile_note = collect_profile(summary, session, tool_calls, errors)
+        except Exception as e:
+            profile_note = f"画像采集异常: {str(e)[:150]}"
 
-    # 截断防护：CLI 后端无 stopReason 可查，用启发式拦截残缺草稿——
-    # ① 代码围栏不闭合（奇数个 ```）；② 尾部中断于标点。任一命中即丢弃，不入候选区。
-    if raw.count("```") % 2 == 1:
-        return reject("LLM 输出疑似截断（代码围栏不闭合），丢弃残缺草稿")
-    nonempty = [l.rstrip() for l in raw.splitlines() if l.strip()]
-    trunc_tails = ("→", "：", ":", "、", "，", "；", "-", "|", "*", "(", "（", "【", "《", "…")
-    ok_tails = ("。", "）", ")", "」", "】", "》", '"', "`")
-    if nonempty:
-        last = nonempty[-1]
-        if last.endswith(trunc_tails) and not last.endswith(ok_tails):
-            return reject(f"LLM 输出疑似截断（尾部中断于『{last[-12:]}』），丢弃残缺草稿")
-
-    # 清洗（供格式校验与 name 提取共用）：剥代码块包裹
-    raw_clean = re.sub(r"```(?:ya?ml|markdown)?\s*", "", raw).strip()
-
-    # 代码层质量校验（LLM 未遵守输出规则时的保险丝）
-    if raw_clean.split("\n", 1)[0].strip() != "---":
-        return reject("草稿缺少 frontmatter（首行非 ---，格式不符）")
-    if len(raw) > MAX_SKILL_CHARS:
-        return reject(f"草稿超长（{len(raw)} > {MAX_SKILL_CHARS} 字符，未遵守输出约束）")
-
-    # 解析 name
-    name_m = re.search(r"^name\s*:\s*[\"']?([^\"'\r\n]+)[\"']?\s*$", raw_clean, re.M)
-    name = name_m.group(1).strip() if name_m else ""
-    slug = slugify(name or "untitled-skill")
-
-    if not name:
-        return reject("LLM 草稿缺少合法 name（frontmatter 格式不符）")
-
-    # 代码层查重保险丝
-    if any(s["name"] == slug for s in list_enabled_skills()):
-        return reject(f"与已启用技能 {slug} 完全同名（查重拦截，LLM 未遵守查重规则）")
-
-    # 写入候选（同名防覆盖：内容相同视为重复采集；不同则以 -N 变体落盘）
-    final_slug = slug
-    target = CANDIDATES_DIR / final_slug
-    if (target / "SKILL.md").exists():
-        existing = (target / "SKILL.md").read_text(encoding="utf-8")
-        if existing == raw:
-            return reject(f"与现有候选 {slug} 内容完全相同（重复采集）")
-        v = 2
-        while (CANDIDATES_DIR / f"{slug}-{v}" / "SKILL.md").exists():
-            v += 1
-        final_slug = f"{slug}-{v}"
-        target = CANDIDATES_DIR / final_slug
-    try:
-        target.mkdir(parents=True, exist_ok=True)
-        (target / "SKILL.md").write_text(raw, encoding="utf-8")
-        (target / "meta.md").write_text(
-            "\n".join([
-                "---",
-                f"candidate-source-session: {session}",
-                f"candidate-tool-calls: {tool_calls}",
-                f"candidate-errors: {errors}",
-                f"candidate-created: {now_iso()}",
-                "---",
-                "",
-            ]), encoding="utf-8",
-        )
-    except Exception as e:
-        return f"❌ 写入候选失败: {str(e)[:200]}"
-
-    # 候选已生成，清除本会话的拒绝记忆
-    if state.get("sessionRejections"):
-        state["sessionRejections"].pop(session, None)
-        if not state["sessionRejections"]:
-            state.pop("sessionRejections", None)
-
-    state["stats"]["candidatesCreated"] = state["stats"].get("candidatesCreated", 0) + 1
-    state["lastCollectionAt"] = now_iso()
-    _advance(state, session, offset, transcript)
-    write_state(state)
-    append_log(f"| {now_local()} | {session} | 候选生成 | 工具{tool_calls}次/错误{errors}次 → {final_slug} | candidates/{final_slug}/ |")
-    return f"🎉 已生成候选技能: {final_slug}（工具{tool_calls}次/错误{errors}次）"
+    skill_note = _collect_skill()
+    return f"{profile_note}\n{skill_note}" if profile_note else skill_note
 
 
 def _advance(state: dict, session: str, offset: int, transcript: str) -> None:
@@ -517,6 +600,101 @@ def _line_count(path: str) -> int:
             return sum(1 for _ in f)
     except Exception:
         return 0
+
+
+# ---------------------------------------------------------------------------
+# 用户画像采集（与技能采集同链路：同采集点、同触发条件，独立 LLM 调用，互不影响）
+# ---------------------------------------------------------------------------
+
+def collect_profile(summary: str, session: str, tool_calls: int, errors: int) -> str:
+    """从轨迹摘要提炼用户画像草稿，写入 <SE_ROOT>/profiles/，待进化流程提炼进 USER.md。"""
+    state = read_state()
+
+    # 堆积上限：画像草稿过多说明进化久未触发，暂停采集并提示
+    try:
+        profile_count = len([d for d in PROFILES_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")]) if PROFILES_DIR.is_dir() else 0
+    except Exception:
+        profile_count = 0
+    if profile_count >= MAX_PROFILES:
+        append_log(f"| {now_local()} | {session} | 画像暂停 | 画像区已满（{profile_count} 个），待进化流程提炼 | - |")
+        return f"画像区已满（{profile_count} 个），待进化流程提炼"
+
+    prompt = build_profile_prompt(summary)
+    try:
+        raw = call_llm(prompt, max_tokens=MAX_PROFILE_OUTPUT_TOKENS)
+    except Exception as e:
+        reason = f"画像采集失败（LLM 异常）: {str(e)[:200]}"
+        state["stats"]["profilesFailed"] = state["stats"].get("profilesFailed", 0) + 1
+        write_state(state)
+        append_log(f"| {now_local()} | {session} | 画像失败 | {reason[:100]} | - |")
+        return f"画像采集失败: {str(e)[:100]}"
+
+    if not raw:
+        reason = "画像采集失败：LLM 返回空内容"
+        state["stats"]["profilesFailed"] = state["stats"].get("profilesFailed", 0) + 1
+        write_state(state)
+        append_log(f"| {now_local()} | {session} | 画像失败 | {reason} | - |")
+        return reason
+
+    if raw.startswith("SKIP:"):
+        reason = raw[5:].strip() or "无可提炼的持久画像信息"
+        append_log(f"| {now_local()} | {session} | 画像跳过 | {reason[:100]} | - |")
+        return f"画像跳过: {reason}"
+
+    # 清洗：剥代码块包裹
+    raw_clean = re.sub(r"```(?:ya?ml|markdown)?\s*", "", raw).strip()
+
+    # 代码层质量校验（最小化规范的机械保险丝）：
+    # ① 每个非空行必须以「- 」开头（无标题/元信息/解释文字）；② 总长 ≤ 上限
+    nonempty = [l for l in raw_clean.splitlines() if l.strip()]
+    if not nonempty or any(not l.strip().startswith("- ") for l in nonempty):
+        reason = "画像草稿格式不符（应为「- 」条目列表，禁止标题/元信息/解释文字）"
+        state["stats"]["profilesRejected"] = state["stats"].get("profilesRejected", 0) + 1
+        write_state(state)
+        append_log(f"| {now_local()} | {session} | 画像拒绝 | {reason[:100]} | - |")
+        return f"❌ {reason}"
+    if len(raw_clean) > MAX_PROFILE_CHARS:
+        reason = f"画像草稿超长（{len(raw_clean)} > {MAX_PROFILE_CHARS} 字符，未遵守最小化约束）"
+        state["stats"]["profilesRejected"] = state["stats"].get("profilesRejected", 0) + 1
+        write_state(state)
+        append_log(f"| {now_local()} | {session} | 画像拒绝 | {reason[:100]} | - |")
+        return f"❌ {reason}"
+
+    # 落盘（slug 取自会话名；同内容去重，不同则以 -N 变体落盘）
+    slug = slugify(session)
+    final_slug = slug
+    target = PROFILES_DIR / final_slug
+    if (target / "profile.md").exists():
+        existing = (target / "profile.md").read_text(encoding="utf-8")
+        if existing == raw_clean:
+            append_log(f"| {now_local()} | {session} | 画像跳过 | 与现有草稿 {slug} 内容完全相同（重复采集） | - |")
+            return f"画像与现有草稿 {slug} 相同，跳过"
+        v = 2
+        while (PROFILES_DIR / f"{slug}-{v}" / "profile.md").exists():
+            v += 1
+        final_slug = f"{slug}-{v}"
+        target = PROFILES_DIR / final_slug
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "profile.md").write_text(raw_clean + "\n", encoding="utf-8")
+        (target / "meta.md").write_text(
+            "\n".join([
+                "---",
+                f"profile-source-session: {session}",
+                f"profile-tool-calls: {tool_calls}",
+                f"profile-errors: {errors}",
+                f"profile-created: {now_iso()}",
+                "---",
+                "",
+            ]), encoding="utf-8",
+        )
+    except Exception as e:
+        return f"❌ 写入画像草稿失败: {str(e)[:200]}"
+
+    state["stats"]["profilesCollected"] = state["stats"].get("profilesCollected", 0) + 1
+    write_state(state)
+    append_log(f"| {now_local()} | {session} | 画像采集 | 工具{tool_calls}次/错误{errors}次 → {final_slug} | profiles/{final_slug}/ |")
+    return f"📸 已生成画像草稿: {final_slug}"
 
 
 def main() -> None:

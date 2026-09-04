@@ -110,6 +110,17 @@ PY
     say "已创建 $dst/settings.json（Stop hook 已指向绝对路径 $dst/hooks/collect.sh）"
   fi
   say "Claude Code 适配完成。settings.json 中的 command 已指向 $dst/hooks/collect.sh（项目级安装可自行改用 \${CLAUDE_PROJECT_DIR} 占位符）"
+
+  # 用户画像注入：在全局 CLAUDE.md 中幂等追加 @import（Claude Code 支持 @ 绝对路径引用，
+  # 进化流程更新 USER.md 后下次会话自动生效）。仅追加引用行，绝不改动用户已有内容。
+  local user_md="$SE_ROOT/memory/USER.md"
+  local import_line="@$user_md"
+  if [[ -f "$dst/CLAUDE.md" ]] && grep -Fq "$import_line" "$dst/CLAUDE.md"; then
+    say "用户画像 @import 已存在于 $dst/CLAUDE.md，跳过"
+  else
+    printf '%s\n' "$import_line" >> "$dst/CLAUDE.md"
+    say "已在 $dst/CLAUDE.md 追加用户画像 @import（→ ${user_md}）"
+  fi
 }
 
 install_codex() {

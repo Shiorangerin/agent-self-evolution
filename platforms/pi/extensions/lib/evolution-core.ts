@@ -49,8 +49,60 @@ export function slugify(name: string): string {
 	);
 }
 
-/** 收集本次会话轨迹摘要 */
-export function buildTraceSummary(entries: any[]): { toolCalls: number; errors: number; summary: string } {
+/**
+ * 通用脱敏：把轨迹文本中的家目录绝对路径统一替换为 ~。
+ * 轨迹摘要会外发给低成本采集模型，家目录结构属于用户环境信息，不应随之外泄。
+ * 纯函数：home 由调用方传入（保持本库不碰 fs / env 的约定）。
+ */
+export function sanitizeTraceText(text: string, home: string): string {
+	if (!text || !home || home === "~") return text;
+	return text.split(home).join("~");
+}
+
+/**
+ * 默认隐私路径模式（通用词表，与具体用户无关）：文件名命中即视为私密内容。
+ * 覆盖日记 / 环境变量 / SSH 密钥 / 证书 / 凭证 / 密码 / 钱包等常见私密文件。
+ * 可通过环境变量 SE_PRIVATE_PATTERNS（逗号分隔）覆盖或扩充。
+ */
+export const DEFAULT_PRIVATE_PATTERNS: ReadonlyArray<string> = [
+	"diary",
+	".env",
+	"id_rsa",
+	"id_ed25519",
+	".pem",
+	"credential",
+	"password",
+	"passwd",
+	"wallet",
+	"private_key",
+	"privatekey",
+	"secrets.",
+];
+
+/** 解析隐私模式：env 值（逗号分隔）非空则覆盖默认词表，否则用内置通用词表 */
+export function privatePatterns(envValue?: string): string[] {
+	const fromEnv = (envValue ?? "")
+		.split(",")
+		.map((s) => s.trim().toLowerCase())
+		.filter(Boolean);
+	return fromEnv.length > 0 ? fromEnv : [...DEFAULT_PRIVATE_PATTERNS];
+}
+
+/**
+ * 隐私熔断检测：轨迹文本命中任一隐私路径模式 → 该会话整体跳过采集（不外发给任何 LLM）。
+ * 启发式按路径片段匹配，宁可误杀不可放过（误杀只损失一次候选，泄露不可逆）。
+ */
+export function touchesPrivateText(text: string, patterns: string[]): boolean {
+	if (!text) return false;
+	const lower = text.toLowerCase();
+	return patterns.some((p) => p && lower.includes(p.toLowerCase()));
+}
+
+/** 收集本次会话轨迹摘要（传入 home 时对摘要做家目录通用脱敏；hasUser 用于画像采集门槛） */
+export function buildTraceSummary(
+	entries: any[],
+	home = "",
+): { toolCalls: number; errors: number; summary: string; hasUser: boolean } {
 	let toolCalls = 0;
 	let errors = 0;
 	const userParts: string[] = [];
@@ -97,9 +149,9 @@ export function buildTraceSummary(entries: any[]): { toolCalls: number; errors: 
 	if (userParts.length) lines.push("【用户请求】\n" + userParts.slice(-5).join("\n"));
 	if (bashParts.length) lines.push("【执行操作】\n" + bashParts.slice(-25).join("\n"));
 	if (errorParts.length) lines.push("【出现的错误】\n" + errorParts.slice(-3).join("\n---\n"));
-	const summary = lines.join("\n\n").slice(0, MAX_TRACE_CHARS);
+	const summary = sanitizeTraceText(lines.join("\n\n"), home).slice(0, MAX_TRACE_CHARS);
 
-	return { toolCalls, errors, summary };
+	return { toolCalls, errors, summary, hasUser: userParts.length > 0 };
 }
 
 /**

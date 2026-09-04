@@ -12,7 +12,10 @@ import {
 	extractText,
 	isSelfManagementSession,
 	judgeOutcome,
+	privatePatterns,
+	sanitizeTraceText,
 	slugify,
+	touchesPrivateText,
 } from "./evolution-core.ts";
 
 describe("slugify", () => {
@@ -193,5 +196,52 @@ describe("judgeOutcome", () => {
 	test("归因窗口从 fromIndex 起：之前的错误不计入", () => {
 		const err = { type: "message", message: { role: "toolResult", isError: true, content: "old error" } };
 		expect(judgeOutcome([err, okRun], 1).outcome).toBe("success");
+	});
+});
+
+describe("sanitizeTraceText", () => {
+	test("家目录绝对路径统一替换为 ~（轨迹外发前的通用脱敏）", () => {
+		expect(sanitizeTraceText("cat /Users/someone/notes.md", "/Users/someone")).toBe("cat ~/notes.md");
+		expect(sanitizeTraceText("read /Users/someone/a /Users/someone/b", "/Users/someone")).toBe("read ~/a ~/b");
+	});
+	test("无命中时原样返回；home 为空时直通", () => {
+		expect(sanitizeTraceText("no path here", "/Users/someone")).toBe("no path here");
+		expect(sanitizeTraceText("/Users/someone/x", "")).toBe("/Users/someone/x");
+	});
+});
+
+describe("privatePatterns / touchesPrivateText", () => {
+	test("缺省使用内置通用词表（不含任何具体用户信息）", () => {
+		const patterns = privatePatterns();
+		expect(patterns).toContain("diary");
+		expect(patterns).toContain(".env");
+		expect(patterns).toContain("id_rsa");
+	});
+	test("SE_PRIVATE_PATTERNS 环境变量非空时覆盖默认词表", () => {
+		expect(privatePatterns("foo, bar")).toEqual(["foo", "bar"]);
+		expect(privatePatterns("  ")).toContain("diary"); // 空值回退默认
+	});
+	test("轨迹命中隐私路径模式 → true（宁可不采不可外发）", () => {
+		expect(touchesPrivateText("cat app/.env", privatePatterns())).toBe(true);
+		expect(touchesPrivateText("read ~/Documents/diary.md", privatePatterns())).toBe(true);
+		expect(touchesPrivateText("mv report.txt ./out/", privatePatterns())).toBe(false);
+	});
+	test("大小写不敏感", () => {
+		expect(touchesPrivateText("cat APP/.ENV", privatePatterns())).toBe(true);
+	});
+});
+
+describe("buildTraceSummary.hasUser", () => {
+	test("有用户消息 → hasUser true；无 → false", () => {
+		const withUser = [{ type: "message", message: { role: "user", content: "帮我整理文件" } }];
+		const noUser = [{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: { command: "ls" } }] } }];
+		expect(buildTraceSummary(withUser).hasUser).toBe(true);
+		expect(buildTraceSummary(noUser).hasUser).toBe(false);
+	});
+	test("传入 home 时摘要做脱敏", () => {
+		const entries = [{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: { command: "cat /Users/someone/a.txt" } }] } }];
+		const { summary } = buildTraceSummary(entries, "/Users/someone");
+		expect(summary).toContain("~/a.txt");
+		expect(summary).not.toContain("/Users/someone");
 	});
 });

@@ -1,7 +1,8 @@
 # agent-self-evolution — Codex 平台适配器
 
 让 Codex CLI 接入 agent-self-evolution：每次任务结束（`Stop` 事件）自动采集会话轨迹，
-满足条件时用 LLM 草拟技能候选，待用户手动触发进化流程审查启用。
+满足条件时用 LLM 并行发起两路独立采集（失败互不影响）：技能候选写入候选区；
+用户画像草稿写入 `profiles/`，待用户手动触发进化流程审查启用 / 提炼进 USER.md。
 
 ```
 platforms/codex/

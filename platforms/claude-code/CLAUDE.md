@@ -53,7 +53,13 @@
 
 ### 第四步：维护记忆
 
-- 用户偏好与习惯 → 追加到 `$SE_ROOT/memory/USER.md`；
+- **用户画像提炼**（来源：`$SE_ROOT/profiles/` 采集草稿）：
+  1. 读取该目录下全部草稿（每个子目录含 `profile.md` 条目列表 + `meta.md` 来源信息）；
+  2. 与现有 `$SE_ROOT/memory/USER.md` 融合：新信息合并为精炼条目；互相矛盾以较新的草稿为准；语义重复的直接丢弃；
+  3. **USER.md 写入规范（严格遵守）**：只保留跨会话成立的高信号条目；每条一句话直接陈述；正向表述优先，避免否定句式；禁止任何举例；禁止任何元信息（文件头说明、「来源：」标注、HTML 注释等）；语言与用户输入一致；
+  4. 处理完的草稿目录移入 `$SE_ROOT/logs/archive/profiles-YYYY-MM/`（保留可回溯）；
+  5. 在 experience-log 记录：画像草稿 N 份 → 提炼 +M 条 / 丢弃 K 条；
+  6. USER.md 已通过全局 `CLAUDE.md` 的 `@` 引用注入上下文（由 install.sh 幂等写入），更新后下次会话自动生效。
 - 踩坑经验 → 追加到 `$SE_ROOT/memory/LESSONS.md`；
 - **严格按文件内的格式模板书写**，不破坏已有结构（LESSONS.md 按「日期 / 场景 / 现象 / 根因 / 解法 / 来源」条目记录）。
 
@@ -73,7 +79,5 @@
 
 ## 记忆文件
 
-- `@memory/USER.md` — 用户画像（`$SE_ROOT/memory/USER.md`）
-- `@memory/LESSONS.md` — 踩坑经验（`$SE_ROOT/memory/LESSONS.md`）
-
-> 说明：上述 `@` 引用路径相对 `$SE_ROOT/memory/` 目录。若本文件所在位置无法解析该相对路径，请把两个 `@` 引用替换为 `$SE_ROOT/memory/` 下对应文件的绝对路径（或在 `$SE_ROOT` 下放置本文件）。
+- USER.md（用户画像）：已由 install.sh 在全局 `~/.claude/CLAUDE.md` 中幂等写入 `@<SE_ROOT 绝对路径>/memory/USER.md` 引用，随上下文自动注入，无需在此重复引用；
+- `@memory/LESSONS.md` — 踩坑经验（`$SE_ROOT/memory/LESSONS.md`），按需读取；若相对路径无法解析，请改用 `$SE_ROOT/memory/LESSONS.md` 绝对路径。
