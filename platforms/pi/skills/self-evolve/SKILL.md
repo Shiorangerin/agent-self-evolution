@@ -12,6 +12,7 @@ description: agent-self-evolution 的自我进化流程（用户手动触发模�
 进化系统数据位于 `$SE_ROOT`（默认 `~/.config/agent-self-evolution/`，可通过环境变量 `SE_ROOT` 覆盖），架构见仓库 `README.md`：
 
 - `candidates/`：经验采集器在任务结束后自动沉淀的候选技能（未启用，不进上下文）
+- `profiles/`：画像采集器（与技能采集同触发条件）自动沉淀的用户画像草稿（未提炼，不进上下文，待本流程第四步提炼进 USER.md）
 - `skills/`：已启用技能的源文件，在 Pi 上通过软链挂到 `~/.pi/agent/skills/` 生效
 - `memory/USER.md`、`memory/LESSONS.md`：长期记忆（用户画像 / 踩坑经验）
 - `logs/experience-log.md`：经验沉淀日志（可追溯）
