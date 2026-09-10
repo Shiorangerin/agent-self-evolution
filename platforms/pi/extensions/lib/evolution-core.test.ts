@@ -10,11 +10,14 @@ import {
 	buildTraceText,
 	entryText,
 	extractText,
+	extractToolPaths,
 	isSelfManagementSession,
 	judgeOutcome,
 	privatePatterns,
 	sanitizeTraceText,
 	slugify,
+	stripOuterFence,
+	touchesPrivatePath,
 	touchesPrivateText,
 } from "./evolution-core.ts";
 
@@ -199,6 +202,21 @@ describe("judgeOutcome", () => {
 	});
 });
 
+describe("stripOuterFence", () => {
+	test("整篇被围栏包裹时剥掉外层", () => {
+		expect(stripOuterFence("```markdown\n---\nname: x\n---\n正文\n```")).toBe("---\nname: x\n---\n正文");
+		expect(stripOuterFence("```\n---\nname: x\n---\n```")).toBe("---\nname: x\n---");
+	});
+	test("正文内部的代码块原样保留（LESSONS 2026-08-26：全局剥围栏会把 ```bash 块删残）", () => {
+		const doc = "---\nname: x\n---\n\n```bash\necho hi\n```\n";
+		expect(stripOuterFence(doc)).toBe(doc.trim());
+		expect(stripOuterFence(doc)).toContain("```bash");
+	});
+	test("无围栏输入直通", () => {
+		expect(stripOuterFence("---\nname: x\n---\n正文")).toBe("---\nname: x\n---\n正文");
+	});
+});
+
 describe("sanitizeTraceText", () => {
 	test("家目录绝对路径统一替换为 ~（轨迹外发前的通用脱敏）", () => {
 		expect(sanitizeTraceText("cat /Users/someone/notes.md", "/Users/someone")).toBe("cat ~/notes.md");
@@ -243,5 +261,55 @@ describe("buildTraceSummary.hasUser", () => {
 		const { summary } = buildTraceSummary(entries, "/Users/someone");
 		expect(summary).toContain("~/a.txt");
 		expect(summary).not.toContain("/Users/someone");
+	});
+});
+
+describe("touchesPrivatePath（甲方案 2026-09-05：只判工具调用路径）", () => {
+	const tc = (name: string, args: Record<string, unknown>) => ({
+		type: "message",
+		message: { role: "assistant", content: [{ type: "toolCall", name, arguments: args }] },
+	});
+	const pats = () => privatePatterns();
+
+	test("真读日记/真读 .env → 熔断", () => {
+		expect(touchesPrivatePath([tc("read", { path: "/Users/someone/Desktop/Diary.md" })], pats())).toBe(true);
+		expect(touchesPrivatePath([tc("bash", { command: "cat ~/.env" })], pats())).toBe(true);
+		expect(touchesPrivatePath([tc("bash", { command: "ls ~/.ssh/id_ed25519" })], pats())).toBe(true);
+		expect(touchesPrivatePath([tc("read", { path: "/app/web/.env.local" })], pats())).toBe(true);
+		expect(touchesPrivatePath([tc("read", { path: "/tmp/a/credentials.json" })], pats())).toBe(true);
+	});
+	test("process.env 代码不再误杀（2026-09-04 …01a06df4… 实证 .env×39 全误杀）", () => {
+		const code = `cat > /tmp/dbg.ts <<'EOF'\nprocess.env.PI_CODING_AGENT_DIR = "/tmp/cc-dbg";`;
+		expect(touchesPrivatePath([tc("bash", { command: code })], pats())).toBe(false);
+	});
+	test("rg 扫描正则不再误杀（2026-09-02 …01a061c3… 实证）", () => {
+		expect(
+			touchesPrivatePath([tc("bash", { pattern: "(\\.env|\\.pem|password|credential)" })], pats()),
+		).toBe(false);
+	});
+	test("用户/助手正文提到文件名不再熔断（提到≠触及）", () => {
+		const entries = [
+			{ type: "message", message: { role: "user", content: "桌面上有 Diary.md 和 TODO.md" } },
+			tc("bash", { command: "eza /Users/someone/Desktop | head" }),
+		];
+		expect(touchesPrivatePath(entries, pats())).toBe(false);
+	});
+	test("普通路径不熔断；大小写不敏感", () => {
+		expect(touchesPrivatePath([tc("read", { path: "/tmp/ase-audit/core/collect.py" })], pats())).toBe(false);
+		expect(touchesPrivatePath([tc("bash", { command: "cat /APP/.ENV" })], pats())).toBe(true);
+	});
+	test("工具结果内容不参与判定（已知残留风险：env 输出类泄露需上层兜底）", () => {
+		const entries = [
+			tc("bash", { command: "eza /tmp | head" }),
+			{ type: "message", message: { role: "toolResult", content: "password=hunter2" } },
+		];
+		expect(touchesPrivatePath(entries, pats())).toBe(false);
+	});
+	test("extractToolPaths：path 键整体收录；自由文本只抠路径 token", () => {
+		const entries = [tc("read", { path: "Diary.md" }), tc("bash", { command: "cd /tmp && rg -i password src" })];
+		const paths = extractToolPaths(entries);
+		expect(paths).toContain("Diary.md");
+		expect(paths).toContain("/tmp");
+		expect(paths.some((p) => p.includes("password"))).toBe(false);
 	});
 });

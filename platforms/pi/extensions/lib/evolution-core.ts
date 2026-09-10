@@ -50,6 +50,16 @@ export function slugify(name: string): string {
 }
 
 /**
+ * 只剥整篇被单个代码围栏包裹的外层，正文内部的 ``` 代码块原样保留。
+ * 不能用全局 replace：那会把候选正文里的 ```bash 块删残（LESSONS 2026-08-26）。
+ */
+export function stripOuterFence(raw: string): string {
+	const t = raw.trim();
+	const m = t.match(/^```[a-zA-Z]*\s*\n([\s\S]*?)\n?```\s*$/);
+	return m ? m[1].trim() : t;
+}
+
+/**
  * 通用脱敏：把轨迹文本中的家目录绝对路径统一替换为 ~。
  * 轨迹摘要会外发给低成本采集模型，家目录结构属于用户环境信息，不应随之外泄。
  * 纯函数：home 由调用方传入（保持本库不碰 fs / env 的约定）。
@@ -89,13 +99,80 @@ export function privatePatterns(envValue?: string): string[] {
 }
 
 /**
- * 隐私熔断检测：轨迹文本命中任一隐私路径模式 → 该会话整体跳过采集（不外发给任何 LLM）。
- * 启发式按路径片段匹配，宁可误杀不可放过（误杀只损失一次候选，泄露不可逆）。
+ * 隐私熔断检测（旧版全文子串，已废弃保留兼容）：轨迹文本命中任一隐私路径模式即熔断。
+ * 缺陷：".env" 会命中代码里的 process.env，rg 正则/帮助文本也会误杀（2026-09-05 实证 4 场 3 误杀）。
+ * 新采集统一走 touchesPrivatePath（只判工具调用的文件路径）。
  */
 export function touchesPrivateText(text: string, patterns: string[]): boolean {
 	if (!text) return false;
 	const lower = text.toLowerCase();
 	return patterns.some((p) => p && lower.includes(p.toLowerCase()));
+}
+
+/**
+ * 路径型工具参数键：这类键的值整体视为文件路径（即使不含 "/"，如相对文件名 "Diary.md"）。
+ */
+const PATH_ARG_KEYS: ReadonlySet<string> = new Set([
+	"path", "file", "filepath", "filename", "dir", "directory", "cwd",
+	"target", "source", "src", "dest", "destination", "folder",
+]);
+
+/** 路径形 token：必须含 "/" 或以 "~" 开头（如 ~/.env、/tmp/x、.agents/skills） */
+const PATH_TOKEN_RE = /~?\/[\w.~][\w.~+\-@]*(\/[\w.~][\w.~+\-@]*)*/g;
+
+/** 从工具调用参数中提取候选路径（用户正文/助手正文/工具结果一律不进，只看行动证据） */
+export function extractToolPaths(entries: any[], limit = 2000): string[] {
+	const out: string[] = [];
+	const push = (s: string) => {
+		const t = s.trim();
+		if (t && t.length <= 500 && out.length < limit) out.push(t);
+	};
+	for (const e of entries ?? []) {
+		const content = e?.message?.content;
+		if (!Array.isArray(content)) continue;
+		for (const block of content) {
+			if (!block || typeof block !== "object" || (block as any).type !== "toolCall") continue;
+			const args = (block as any).arguments;
+			if (!args || typeof args !== "object") continue;
+			for (const [k, v] of Object.entries(args)) {
+				if (typeof v !== "string") continue;
+				if (PATH_ARG_KEYS.has(String(k).toLowerCase())) {
+					push(v);
+				} else {
+					// bash -c 等自由文本参数：只抠路径形 token，rg 正则/代码片段自动排除
+					PATH_TOKEN_RE.lastIndex = 0;
+					let m: RegExpExecArray | null;
+					while ((m = PATH_TOKEN_RE.exec(v)) !== null) push(m[0]);
+				}
+			}
+		}
+		if (out.length >= limit) break;
+	}
+	return out;
+}
+
+/**
+ * 隐私熔断检测（甲方案，2026-09-05）：任一工具调用的文件路径命中隐私模式 → 整场跳过采集。
+ * 点号模式（.env/.pem）要求路径片段全等（兼容 .env.local 类变体）；单词模式（diary/credential）要求片段包含。
+ * 提到文件名不算触及，只有真读真写才算：process.env、rg 扫描正则、CLI 帮助文本不再误杀。
+ */
+export function touchesPrivatePath(entries: any[], patterns: string[]): boolean {
+	const paths = extractToolPaths(entries);
+	if (paths.length === 0) return false;
+	const pats = (patterns ?? []).map((p) => String(p).toLowerCase()).filter(Boolean);
+	if (pats.length === 0) return false;
+	for (const raw of paths) {
+		const segs = String(raw).toLowerCase().split("/").filter(Boolean);
+		if (segs.length === 0) continue;
+		for (const p of pats) {
+			if (p.startsWith(".")) {
+				if (segs.some((s) => s === p || s.startsWith(p + "."))) return true;
+			} else {
+				if (segs.some((s) => s.includes(p))) return true;
+			}
+		}
+	}
+	return false;
 }
 
 /** 收集本次会话轨迹摘要（传入 home 时对摘要做家目录通用脱敏；hasUser 用于画像采集门槛） */
