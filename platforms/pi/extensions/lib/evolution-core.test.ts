@@ -1,7 +1,7 @@
 /**
  * evolution-core 纯函数库测试（bun test 运行，零外部依赖）
  *
- * 用例来源：进化系统历史踩坑实录（LESSONS.md）+ 迭代中人工发现的缺陷。
+ * 用例来源：进化系统历史问题实录（LESSONS.md）+ 迭代中人工发现的缺陷。
  * 每个用例对应一个真实发生过的问题，防止回归。
  */
 import { describe, expect, test } from "bun:test";

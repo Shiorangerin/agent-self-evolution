@@ -78,7 +78,7 @@ agent_settled / Stop hook 触发
 
 纯规则零成本：扫描轨迹文本，命中技能路径（强信号）或 slug（弱信号）即记录，并对强信号技能做
 **结果归因**（成功/失败/未知 + 失败原因原文片段）。用于「技能体检」三线处置（闲置/问题/优质），
-支撑归档、补坑与淘汰决策。**决策权永远在用户**。
+支撑归档、补问题与淘汰决策。**决策权永远在用户**。
 
 实现：Pi 平台为 TS 扩展 `skill-usage.ts`（agent_settled 触发）；Claude Code / Codex 平台为
 Python 等价实现 `core/track_usage.py`（hook 归一化轨迹后调用），两者写同一份 `usage.json`。

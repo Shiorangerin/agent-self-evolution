@@ -4,7 +4,7 @@
 对 evolution/candidates/ 下每个候选做一键体检：
   ① 格式：首行 --- / frontmatter 闭合 / name 合法且与目录一致 / description 存在
   ② 大小：SKILL.md ≤ 8000 字符
-  ③ 截断启发式：代码围栏不闭合、尾部中断于标点（LESSONS 2026-08-17 截断坑）
+  ③ 截断启发式：代码围栏不闭合、尾部中断于标点（LESSONS 2026-08-17 截断问题）
   ④ 查重：name 与已启用技能完全同名；description 高相似度提示
 
 刻意只用标准库 + 正则解析 frontmatter，绝不 import yaml

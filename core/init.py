@@ -6,7 +6,7 @@ agent-self-evolution — 数据目录初始化
   candidates/   候选技能区（采集器写入，进化流程审查）
   profiles/     用户画像草稿区（采集器写入，进化流程提炼进 USER.md）
   skills/       已启用技能源文件
-  memory/       长期记忆（USER.md 用户画像 / LESSONS.md 踩坑经验）
+  memory/       长期记忆（USER.md 用户画像 / LESSONS.md 经验与教训）
   logs/         经验日志、每日总结、被拒草稿
   state.json    系统状态与统计
   usage.json    技能使用统计

@@ -7,7 +7,7 @@
 数据根目录为 `$SE_ROOT`（默认 `~/.config/agent-self-evolution/`）：
 - `candidates/` — 待审查的候选技能区（不进入运行上下文）
 - `skills/` — 已启用技能（SKILL.md 源文件）
-- `memory/` — 长期记忆（USER.md 用户画像 / LESSONS.md 踩坑经验）
+- `memory/` — 长期记忆（USER.md 用户画像 / LESSONS.md 经验与教训）
 - `logs/` — 经验日志、启用/淘汰记录、被拒草稿
 - `state.json` — 系统状态与统计
 - `usage.json` — 技能使用统计
@@ -30,7 +30,7 @@
    - `description`：中文，≤1024 字符，写明「何时使用」
    - SKILL.md 正文：总长 ≤8000 字符（可先用 `scripts/candidate_preflight.py` 零 token 预检）
 2. **查重**：与 `$SE_ROOT/skills/` 下已启用技能对比（名称与语义），重复的必须淘汰
-3. **价值评估**：判断是否可复用——有明确步骤流程、常见坑点、会重复出现的任务才值得启用；
+3. **价值评估**：判断是否可复用——有明确步骤流程、常见问题、会重复出现的任务才值得启用；
    一次性的琐碎问答、闲聊直接淘汰
 
 ### 第二步：启用 / 并入 / 淘汰
@@ -54,7 +54,7 @@
 2. **问题技能（健康度）**：读取每个技能的 `outcomes`（success/failure/unknown）与
    `failReasons`，计算失败率 `failure/(success+failure)`，列出 **失败 ≥2 次，或失败率 >50% 且失败 ≥1 次**
    的技能清单（附报错原文片段），逐一复核：
-   - 失败原因属于技能未覆盖的坑 → 给该技能 SKILL.md 补「常见坑点」，`state.json` 的 `stats.skillsRepaired` +1
+   - 失败原因属于技能未覆盖的问题 → 给该技能 SKILL.md 补「常见问题」，`state.json` 的 `stats.skillsRepaired` +1
    - 技能内容与实际不符 → 重写对应步骤，同样记 `stats.skillsRepaired` +1
    - 屡败零胜（failure ≥3 且 success = 0）→ 建议淘汰，征求用户决定
    - 结果归因是启发式，可能误判：必要时回读该技能 `lastSession` 的原始轨迹确认
@@ -70,7 +70,7 @@
   3. **USER.md 写入规范（严格遵守）**：只保留跨会话成立的高信号条目；每条一句话直接陈述；正向表述优先，避免否定句式；禁止任何举例；禁止任何元信息；语言与用户输入一致；
   4. 处理完的草稿目录移入 `$SE_ROOT/logs/archive/profiles-YYYY-MM/`（保留可回溯）；
   5. 在 experience-log 记录提炼结果；用户的隐私信息绝不写入任何公开内容。
-- `LESSONS.md`（踩坑经验）：从会话轨迹与本次进化中发现的新坑点，按模板追加
+- `LESSONS.md`（经验与教训）：从会话轨迹与本次进化中发现的新注意点，按模板追加
   （场景 / 现象 / 根因 / 解法 / 来源），已有的重复经验不重复记录
 
 ### 第五步：收尾
@@ -100,4 +100,4 @@
 按需读取：
 
 - `@memory/USER.md` — 用户画像（偏好、习惯、禁忌）
-- `@memory/LESSONS.md` — 踩坑经验（长期记忆，处理任务前如需要可先查阅）
+- `@memory/LESSONS.md` — 经验与教训（长期记忆，处理任务前如需要可先查阅）

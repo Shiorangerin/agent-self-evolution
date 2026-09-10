@@ -14,7 +14,7 @@ description: agent-self-evolution 的自我进化流程（用户手动触发模�
 - `candidates/`：经验采集器在任务结束后自动沉淀的候选技能（未启用，不进上下文）
 - `profiles/`：画像采集器（与技能采集同触发条件）自动沉淀的用户画像草稿（未提炼，不进上下文，待本流程第四步提炼进 USER.md）
 - `skills/`：已启用技能的源文件，在 Pi 上通过软链挂到 `~/.pi/agent/skills/` 生效
-- `memory/USER.md`、`memory/LESSONS.md`：长期记忆（用户画像 / 踩坑经验）
+- `memory/USER.md`、`memory/LESSONS.md`：长期记忆（用户画像 / 经验与教训）
 - `logs/experience-log.md`：经验沉淀日志（可追溯）
 - `logs/session-summaries/`：~~每日工作总结存档~~（功能已删除，仅存历史）
 - `state.json`：系统状态与统计
@@ -50,7 +50,7 @@ description: agent-self-evolution 的自我进化流程（用户手动触发模�
 - 对比 `~/.pi/agent/skills/` 现有技能，语义重复或高度重叠 → 合并进现有技能或淘汰
 
 **③ 价值评估**
-- 这类任务以后会重复出现吗？步骤清晰、可复用吗？有真实经验/坑点吗？
+- 这类任务以后会重复出现吗？步骤清晰、可复用吗？有真实经验/注意点吗？
 - 一次性的琐碎内容、明显噪声 → 淘汰
 
 **处置**
@@ -80,7 +80,7 @@ description: agent-self-evolution 的自我进化流程（用户手动触发模�
 
    **② 问题技能（健康度）**：读取每个技能的 `outcomes`（success/failure/unknown）与 `failReasons`，计算失败次数与失败率 `failure/(success+failure)`，列出 **失败 ≥2 次，或失败率 >50% 且失败 ≥1 次** 的技能清单（附 failReasons 报错原文片段），逐一复核处置：
    - 先看 `usage.json` 里的 `failReasons`，必要时回会话记录读该技能 `lastSession` 的原始轨迹确认失败原因（结果归因是启发式，可能误判，以原始轨迹为准）
-   - **坑点缺失**：失败原因属于技能未覆盖的场景/坑 → 用 `edit` 给该技能 SKILL.md 补「常见坑点」，`state.json` 的 `stats.skillsRepaired` +1
+   - **注意点缺失**：失败原因属于技能未覆盖的场景/问题 → 用 `edit` 给该技能 SKILL.md 补「常见问题」，`state.json` 的 `stats.skillsRepaired` +1
    - **步骤错误/过时**：技能内容与实际不符 → 用 `edit` 重写对应步骤，同样记 `stats.skillsRepaired` +1
    - **屡败零胜**（failure ≥3 且 success = 0）→ 建议淘汰，征求用户决定
    - 拿不准的向用户汇报求决策，绝不自行删技能
@@ -90,13 +90,13 @@ description: agent-self-evolution 的自我进化流程（用户手动触发模�
    汇报时给出每个技能的使用次数与成功/失败/未知计数，让用户一眼看清谁好谁坏。
 
 阅读 `memory/LESSONS.md`、今天的会话总结与近期 `experience-log.md`，判断是否有现有技能需要更新：
-- 步骤过时/有更优做法/有新增坑点 → 用 `edit` 修改 `$SE_ROOT/skills/<name>/SKILL.md`（软链指向源文件）
+- 步骤过时/有更优做法/有新增注意点 → 用 `edit` 修改 `$SE_ROOT/skills/<name>/SKILL.md`（软链指向源文件）
 - 已启用技能若长期未被使用或与新的候选重叠 → 考虑合并/淘汰
 
 ### 超长技能压缩（省 token 规范）
 
 不在主会话人肉重写超长技能：
-1. 用低成本模型起草压缩稿：prompt 附原 SKILL.md 全文 + 硬约束（保留全部坑点/命令/参数/实测结论，只删冗余叙述、重复示例；≤8000 字符）
+1. 用低成本模型起草压缩稿：prompt 附原 SKILL.md 全文 + 硬约束（保留全部注意点/命令/参数/实测结论，只删冗余叙述、重复示例；≤8000 字符）
 2. 人工只审 diff 确认零信息损失后落盘；拿不准的段落保留原状
 3. 单技能 >8K 或涉及用户隐私边界的，先逐项征求用户意见再动
 
@@ -126,12 +126,12 @@ ln -sfn $SE_ROOT/archived/<name> ~/.pi/agent/skills/<name>
   3. **USER.md 写入规范（严格遵守）**：只保留跨会话成立的高信号条目；每条一句话直接陈述；**正向表述优先，避免否定句式**；**禁止任何举例**；内容**必须纯净**——禁止文件头说明、`来源：xxx` 标注、HTML 注释等任何元信息（USER.md 若通过系统提示注入如 Pi 的 `APPEND_SYSTEM.md` 软链，错误条目会持续影响行为）；语言与用户输入一致；
   4. 处理完的草稿目录移入 `logs/archive/profiles-YYYY-MM/`（保留可回溯，不删除）；
   5. 在经验日志记录：画像草稿 N 份 → 提炼 +M 条 / 丢弃 K 条。
-- 提炼踩坑经验 → 追加到 `memory/LESSONS.md`（严格按文件中的格式模板；LESSONS.md 若不注入 prompt，可保留「来源」标注用于追溯）
+- 提炼经验与教训 → 追加到 `memory/LESSONS.md`（严格按文件中的格式模板；LESSONS.md 若不注入 prompt，可保留「来源」标注用于追溯）
 - 记忆条目要精炼，避免重复；已有的不再追加
 
 ### 第五步：收尾
 
-1. 更新 `state.json`：`lastEvolutionAt`（当前时间）、`stats.skillsEnabled`、`stats.skillsUpdated`、`stats.candidatesRejected`、`stats.skillsRepaired`（本次修复/补坑的技能数）等计数
+1. 更新 `state.json`：`lastEvolutionAt`（当前时间）、`stats.skillsEnabled`、`stats.skillsUpdated`、`stats.candidatesRejected`、`stats.skillsRepaired`（本次修复/补问题的技能数）等计数
 2. 在 `experience-log.md` 追加本次进化总结行：`| 时间 | - | 进化 | 审查X候选：启用A/淘汰B/并入C；更新技能D；记忆+E | - |`
 3. **日志维护**（保持文件精简，避免进化时读取膨胀）：
    - `experience-log.md` 数据行超过 100 行时，把旧条目归档到 `logs/archive/experience-log-YYYY-MM.md`（表头保留，主文件只留最近 40 条）
