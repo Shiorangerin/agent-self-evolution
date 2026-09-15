@@ -51,19 +51,30 @@ cp platforms/pi/skills/self-evolve/SKILL.md ~/.pi/agent/skills/self-evolve/SKILL
 
 ### 4. LLM 后端
 
-Pi 扩展默认使用内置**免费模型链**（按序降级），无需额外配置；采集使用 `reasoningEffort: "low"` 与受限 `maxTokens` 控制成本。
+Pi 扩展**不预设任何模型**，采集链在每次采集时按你当前 `~/.pi/agent/models.json` 实时解析（按序降级）：
 
-内置链模型须存在于你的 `~/.pi/agent/models.json`，否则会被过滤；若你的环境没有这些模型，或想换成自己的便宜/免费模型，在 `$SE_ROOT/config.json` 的 `collector.models` 配置自选链（优先生效）：
+1. **自动挑最便宜的**：从 pi 注册表里「已配置凭证」的模型中按价格升序（`id` 带 free 标记或单价为 0 的免费模型优先，未知定价垫底）；
+2. **当前主模型兜底**：会话当前用的主模型挂在链尾——它一定在模型表里，所以**永远不会出现「链为空」**；
+3. 想固定用自己的几个模型：在 `$SE_ROOT/config.json` 的 `collector.models` 里钉扎（排在链首，仍逐项校验，失效的会被丢弃并在日志里注明）。
 
 ```json
 {
   "collector": {
-    "models": [{ "provider": "your-provider", "id": "your-cheap-model" }]
+    "models": [],
+    "auto": true,
+    "includeCurrentModel": true,
+    "max": 3
   }
 }
 ```
 
-⚠️ 不要把昂贵模型填进采集链：采集是高频后台调用。
+- `models`：显式钉扎项（可选）；`auto`：是否自动挑最便宜的（默认开）；`includeCurrentModel`：是否把当前主模型作为链尾兜底（默认开）；`max`：链长上限（默认 3）。
+- 链内容变化时会往 `$SE_ROOT/logs/experience-log.md` 写一行 `采集链` 记录；链彻底为空时写一行 `采集失败` 并落 `state.collectorUnavailable` 标记，**不会静默断流**。
+- 在 pi 里随时用 `/evolve-models` 查看当前解析出的链、来源与被丢弃的失效项。
+
+采集使用 `reasoningEffort: "low"` 与受限 `maxTokens` 控制成本；链已按由廉到贵排序，除非你的模型表里全是昂贵模型，否则不会烧钱。
+
+⚠️ 不要把昂贵模型钉扎进采集链：采集是高频后台调用。
 
 ## 使用
 

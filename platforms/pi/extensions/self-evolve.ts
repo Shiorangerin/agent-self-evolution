@@ -18,7 +18,10 @@
  * - 轨迹摘要截断，只保留关键信息；外发前做通用脱敏（家目录 → ~）；
  *   工具调用的文件路径命中隐私模式（diary/.env/密钥等，可用 SE_PRIVATE_PATTERNS 覆盖）时整场熔断，
  *   内容不外发给任何 LLM（宁可误杀不可放过，force 也不绕过）
- * - 采集模型固定走免费模型链（不跟随会话主模型，主模型更换不影响采集），
+ * - 采集模型链在每次采集时按「当前注册表里已配置凭证的模型」自动挑最廉价的
+ *   （id 带 free 标记或单价为 0 的优先），显式配置 collector.models 只作钉扎不替代自动挑选；
+ *   链发生任何变化（模型下架/凭证失效/价格变化）都会解析出新的链并留一行经验日志，
+ *   绝不出现「写死的模型下架 → 整条链静默失效」这类断流（LESSONS 2026-09-15）；
  *   按序降级轮询；reasoningEffort 统一 "low"（minimal/off 在「必须思考」型模型上会 400 [1210]）
  * - maxTokens: 3072（要给推理模型留思考空间 + 输出 SKILL.md 正文；2000 实测会截断长草稿）
  * - cacheRetention: "none"（不产生缓存开销）
@@ -38,7 +41,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync, readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { buildTraceSummary, extractText, isSelfManagementSession, privatePatterns, slugify, stripOuterFence, touchesPrivatePath } from "./lib/evolution-core.ts";
+import { buildTraceSummary, collectorChainKey, extractText, isSelfManagementSession, mergeCollectorChain, privatePatterns, rankCollectorModels, slugify, stripOuterFence, touchesPrivatePath } from "./lib/evolution-core.ts";
 
 const EVO_DIR = process.env.SE_ROOT || join(homedir(), ".config", "agent-self-evolution");
 const CANDIDATES_DIR = join(EVO_DIR, "candidates");
@@ -57,16 +60,15 @@ const THROTTLE_MS = 0; // 全局节流已关闭（默认关闭）。增量采集
 const MAX_OUTPUT_TOKENS = 3072; // 草拟 skill 的输出预算（2000 实测会截断长草稿，见 LESSONS 2026-08-17）
 const MAX_SKILL_CHARS = 8000; // 草稿长度上限（上限放宽至 8000：防膨胀但不苛待知识密集技能）
 
-// 采集模型链：默认使用内置免费模型（不跟随会话主模型，主模型更换不影响采集）。
-// 可在 $SE_ROOT/config.json 的 collector.models 指定自己的模型链（防止默认链不可用时静默失效，
-// 也避免换用昂贵模型）——配置存在且非空时优先生效。
-// 注意：链中模型须存在于 ~/.pi/agent/models.json，否则启动时被过滤。
-const COLLECTOR_MODEL_CHAIN: ReadonlyArray<{ provider: string; id: string }> = [
-	{ provider: "opencode-zen", id: "hy3-free" },
-	{ provider: "opencode-zen", id: "muse-spark-1.2-contributor-free" },
-	{ provider: "opencode-zen", id: "nemotron-3-ultra-free" },
-	{ provider: "opencode-zen", id: "x-preview-f-free" },
-];
+// 采集模型链：默认留空，完全由「按成本自动挑选」决定（见 resolveCollectorChain）。
+// 只需在 $SE_ROOT/config.json 配置 collector 即可：
+//   { "collector": { "models": [{provider,id}...], "auto": true, "max": 3, "includeCurrentModel": true } }
+//   · models：显式钉扎项（可选，排最前），仍逐项校验凭证，失效的会被丢弃并在日志里注明；
+//   · auto（默认 true）：自动从当前模型表里按价格挑最廉价的（免费优先）；
+//   · includeCurrentModel（默认 true）：把会话当前主模型作为链尾兜底，保证永远有可用项；
+//   · max（默认 3）：链长上限。
+// 这里保留一个最后兜底的固定链（可选，留空即完全依赖自动挑选 + 显式配置）。
+const COLLECTOR_MODEL_CHAIN: ReadonlyArray<{ provider: string; id: string }> = [];
 
 // 会话文件 → 状态，防止同一会话重复/并发触发
 const busy = new Map<string, "collecting" | "done">();
@@ -98,16 +100,145 @@ function nowLocal(): string {
 	return new Date().toLocaleString("zh-CN", { hour12: false });
 }
 
-/** 读取 $SE_ROOT/config.json 的 collector.models（用户自选采集模型链）；未配置返回空数组 */
-function readConfiguredModels(): { provider: string; id: string }[] {
+/** 读取 $SE_ROOT/config.json 的 collector 段；缺失/损坏时回退默认值 */
+function readCollectorConfig(): {
+	models: { provider: string; id: string }[];
+	auto: boolean;
+	includeCurrentModel: boolean;
+	max: number;
+} {
 	try {
-		const cfg = JSON.parse(readFileSync(CONFIG_FILE, "utf8"));
-		const models = cfg?.collector?.models;
-		if (Array.isArray(models)) {
-			return models.filter((m: any) => m?.provider && m?.id).map((m: any) => ({ provider: String(m.provider), id: String(m.id) }));
+		const cfg = JSON.parse(readFileSync(CONFIG_FILE, "utf8"))?.collector ?? {};
+		const models = Array.isArray(cfg.models)
+			? cfg.models
+				.filter((m: any) => m?.provider && m?.id)
+				.map((m: any) => ({ provider: String(m.provider), id: String(m.id) }))
+			: [];
+		return {
+			models,
+			auto: cfg.auto !== false,
+			includeCurrentModel: cfg.includeCurrentModel !== false,
+			max: Number.isFinite(Number(cfg.max)) && Number(cfg.max) > 0 ? Math.trunc(Number(cfg.max)) : 3,
+		};
+	} catch {
+		/* 静默：配置缺失/损坏时用默认值（自动挑选） */
+	}
+	return { models: [], auto: true, includeCurrentModel: true, max: 3 };
+}
+
+/** 链解析结果的缓存有效期：过期重算（凭证/配额可能中途失效） */
+const CHAIN_CACHE_MS = 6 * 60 * 60 * 1000;
+/** 凭证探测的候选上限：候选池再大也只探测这么多个，避免白耗 */
+const CHAIN_PROBE_LIMIT = 8;
+
+/**
+ * 解析采集模型链（按代价从低到高，免费优先）：
+ * 1. 显式钉扎（config.json collector.models）——仍逐项校验，失效项丢弃；
+ * 2. 自动挑选：只从「当前注册表里已配置凭证」的模型里按价格排序（免费优先）；
+ * 3. 会话当前主模型作为链尾兜底（includeCurrentModel，默认开）——它总在该表里，
+ *    任何时候都不会出现「链为空」；
+ * 4. 最后兜底固定链 COLLECTOR_MODEL_CHAIN。
+ * 从候选池取回模型时逐个探测凭证（getApiKeyAndHeaders），探测不过的跳过并记录原因，
+ * 因此模型下架 / provider 被删 / 凭证失效都不会再让整条链静默失效。
+ * 结果按候选池指纹缓存 CHAIN_CACHE_MS，避免每轮 settle 重复探测。
+ * 命名导出仅为可测试性（供离线 harness 直接调用）。
+ */
+export async function resolveCollectorChain(
+	ctx: any,
+	state: any,
+	force = false,
+): Promise<{ chain: any[]; note: string }> {
+	const cfg = readCollectorConfig();
+	const registry = ctx?.modelRegistry;
+
+	// 候选池：优先「已配置凭证」（可用）的模型；不可用时退回全部模型，由凭证探测兜底
+	let pool: any[] = [];
+	let poolSource = "available";
+	try {
+		pool = (registry?.getAvailable?.() ?? []) as any[];
+		if (pool.length === 0) {
+			pool = (registry?.getAll?.() ?? []) as any[];
+			poolSource = "all";
 		}
-	} catch { /* 静默：配置缺失/损坏时回退内置链 */ }
-	return [];
+	} catch {
+		pool = [];
+	}
+	const poolInfo = pool.map((m) => ({ provider: String(m?.provider ?? ""), id: String(m?.id ?? ""), name: m?.name, cost: m?.cost }));
+	// 会话当前主模型（链尾兜底）：模型表里一定存在，且与用户当下用的是同一套凭证
+	const current = ctx?.model && ctx.model.provider && ctx.model.id ? { provider: String(ctx.model.provider), id: String(ctx.model.id) } : undefined;
+	const fingerprint = `cur=${current ? `${current.provider}/${current.id}` : "-"}|auto=${cfg.auto ? 1 : 0}|max=${cfg.max}|exc=${cfg.includeCurrentModel ? 1 : 0}|${poolInfo
+		.map((m) => `${m.provider}/${m.id}:${m.cost?.input ?? "?"}:${m.cost?.output ?? "?"}`)
+		.sort()
+		.join(",")}|${cfg.models.map((m) => `${m.provider}/${m.id}`).join(",")}`;
+
+	const cached = state?.collectorChain;
+	if (!force && cached?.fingerprint === fingerprint && pool.length > 0) {
+		const age = Date.now() - Date.parse(cached.at ?? 0);
+		if (Number.isFinite(age) && age < CHAIN_CACHE_MS) {
+			const chain = (cached.chain ?? [])
+				.map((e: any) => ({ cfg: e, model: registry?.find?.(e.provider, e.id) }))
+				.filter((x: any) => x.model);
+			if (chain.length > 0) return { chain, note: cached.note ?? "" };
+		}
+	}
+
+	// 自动层为「当前主模型」预留末位（开启 includeCurrentModel 时），其余按价格排
+	const autoBudget = cfg.auto ? Math.max(1, cfg.max - (cfg.includeCurrentModel && current ? 1 : 0)) : 0;
+	const autoRanked = autoBudget > 0
+		? rankCollectorModels(poolInfo, { max: autoBudget, exclude: cfg.includeCurrentModel && current ? [...cfg.models, current] : cfg.models })
+		: [];
+	const tailCandidates = cfg.includeCurrentModel && current ? [current] : [];
+	const candidates = mergeCollectorChain(
+		cfg.models,
+		[...autoRanked, ...tailCandidates],
+		cfg.max + CHAIN_PROBE_LIMIT,
+	);
+	const fallback = mergeCollectorChain([], [...COLLECTOR_MODEL_CHAIN], CHAIN_PROBE_LIMIT).filter(
+		(e) => !candidates.some((c) => c.provider === e.provider && c.id === e.id),
+	);
+
+	const chain: any[] = [];
+	const dropped: string[] = [];
+	for (const entry of [...candidates, ...fallback]) {
+		if (chain.length >= cfg.max) break;
+		if (chain.length + dropped.length >= CHAIN_PROBE_LIMIT) break;
+		const model = registry?.find?.(entry.provider, entry.id) ?? pool.find((m) => m.provider === entry.provider && m.id === entry.id);
+		if (!model) {
+			dropped.push(`${entry.provider}/${entry.id}(不在模型表)`);
+			continue;
+		}
+		try {
+			const auth = await registry?.getApiKeyAndHeaders?.(model);
+			if (auth && (!auth.ok || (!auth.apiKey && !auth.headers))) {
+				dropped.push(`${entry.provider}/${entry.id}(无凭证)`);
+				continue;
+			}
+		} catch {
+			dropped.push(`${entry.provider}/${entry.id}(凭证探测异常)`);
+			continue;
+		}
+		chain.push({ cfg: entry, model });
+	}
+
+	const key = collectorChainKey(chain.map((x) => x.cfg));
+	const isPinned = (e: any) => cfg.models.some((m) => m.provider === e.provider && m.id === e.id);
+	const source = chain.some((x) => isPinned(x.cfg)) ? "钉扎+自动" : cfg.auto ? "自动挑选" : "固定链";
+	const note = `池=${poolSource}:${pool.length}；链=${key || "(空)"}；来源=${source}${dropped.length > 0 ? `；丢弃=${dropped.join("、")}` : ""}`;
+
+	// 链内容/来源有变化 → 落 state 并写一行经验日志（不刷屏，只在变化时留痕）；
+	// 链仍为空但「丢弃原因」变了也要留痕，否则同一个不可用周期里的新原因会被吞掉。
+	const prevKey = state?.collectorChainKey;
+	const prevNote = state?.collectorChainNote;
+	if (state) {
+		state.collectorChain = { fingerprint, chain: chain.map((x) => x.cfg), at: nowIso(), note };
+		state.collectorChainKey = key;
+		state.collectorChainNote = note;
+		writeState(state);
+	}
+	if ((key && key !== prevKey) || (!key && note !== prevNote)) {
+		appendLog(`| ${nowLocal()} | - | 采集链 | ${note} | - |`);
+	}
+	return { chain, note };
 }
 
 /** 读取已启用技能清单（name + 一句话描述），供采集 prompt 查重与代码层拦截 */
@@ -352,15 +483,23 @@ async function collect(pi: ExtensionAPI, ctx: any, force = false): Promise<strin
 			return `条件不满足（工具调用 ${toolCalls} 次、无错误），不值得调用 LLM`;
 		}
 
-		// 满足触发条件 → 解析采集模型链（用户配置优先，未配置用内置免费链；画像与技能采集共用）
-		const configuredModels = readConfiguredModels();
-		const modelChain = (configuredModels.length > 0 ? configuredModels : COLLECTOR_MODEL_CHAIN)
-			.map((cfg) => ({
-				cfg,
-				model: ctx.modelRegistry.find(cfg.provider, cfg.id),
-			}))
-			.filter((x) => x.model);
-		if (modelChain.length === 0) return "采集模型链全部不可用（models.json 中无匹配模型）";
+		// 满足触发条件 → 解析采集模型链（显式钉扎 + 按成本自动挑选，逐项校验凭证）
+		const { chain: modelChain, note: chainNote } = await resolveCollectorChain(ctx, state, force);
+		if (modelChain.length === 0) {
+			// 静默断流防线：链全不可用时只在首次进入该状态留痕，既保证断流可诊断，又不每轮 settle 刷屏
+			const reason = `采集模型链全部不可用（${chainNote}）`;
+			if (!state.collectorUnavailable) {
+				state.collectorUnavailable = true;
+				writeState(state);
+				appendLog(`| ${nowLocal()} | ${shortName} | 采集失败 | ${reason} | - |`);
+			}
+			return reason;
+		}
+		// 链恢复可用 → 清除断流标记，下一次不可用能再次留痕
+		if (state.collectorUnavailable) {
+			delete state.collectorUnavailable;
+			writeState(state);
+		}
 		if (!force) busy.set(sessionFile, "collecting");
 
 		try {
@@ -782,6 +921,26 @@ export default function (pi: ExtensionAPI) {
 				appendLog(`| ${nowLocal()} | 手动触发 | 采集 | ${result.replace(/\|/g, "/").slice(0, 100)} | - |`);
 				try {
 					ctx.ui.notify(`[自我进化] ${result}`, "info");
+				} catch { /* 非交互模式可能无 ui */ }
+			} catch {
+				/* 静默 */
+			}
+		},
+	});
+
+	// 手动触发：/evolve-models（查看当前采集模型链解析结果，绕缓存）
+	pi.registerCommand("evolve-models", {
+		description: "查看采集模型链：按成本自动挑选的结果、来源与丢弃项",
+		handler: async (_args, ctx) => {
+			try {
+				const state = readState();
+				const { chain, note } = await resolveCollectorChain(ctx, state, true);
+				const summary = chain.length === 0
+					? `无可用采集模型：${note}`
+					: `采集链（${chain.length}）：${collectorChainKey(chain.map((x) => x.cfg))}\n${note}`;
+				appendLog(`| ${nowLocal()} | 手动触发 | 采集链 | ${note.replace(/\|/g, "/")} | - |`);
+				try {
+					ctx.ui.notify(`[自我进化] ${summary}`, "info");
 				} catch { /* 非交互模式可能无 ui */ }
 			} catch {
 				/* 静默 */

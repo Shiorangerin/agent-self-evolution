@@ -392,3 +392,95 @@ export function judgeOutcome(
 	// 只读取了技能文件、无实际执行活动 → 无法判定
 	return { outcome: "unknown", reasons: [] };
 }
+
+// ─── 采集模型链：按成本自动挑选（防止写死的链在模型下架后静默失效） ───────────────
+
+/** 采集候选模型的最小信息（来自 pi 模型注册表或 models.json 的 providers[].models[]） */
+export type CollectorModelInfo = {
+	provider: string;
+	id: string;
+	name?: string;
+	cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+};
+
+/** 链中一项：{provider, id}，与 pi 注册表的 find(provider, id) 参数一致 */
+export type CollectorChainEntry = { provider: string; id: string };
+
+/** 免费标记：id 里出现独立词 free（如 `xxx:free` / `xxx-free` / `xxx-free-v2`） */
+const FREE_TOKEN_RE = /(^|[-/_:.])free([-/_:.]|$)/;
+
+/**
+ * 免费判定：id 带 free 标记，或输入/输出单价都为 0。
+ * 免费模型是采集器的首选（采集是纯开销，不该花钱）。
+ */
+export function isFreeModel(model: CollectorModelInfo): boolean {
+	if (!model || typeof model.id !== "string") return false;
+	if (FREE_TOKEN_RE.test(model.id.toLowerCase())) return true;
+	const cost = model.cost;
+	if (!cost) return false;
+	return (cost.input ?? 0) === 0 && (cost.output ?? 0) === 0;
+}
+
+/**
+ * 采集成本评分（越低越优先）：免费 0，未知定价视为最贵。
+ * 评分为输入+输出单价之和（采集请求是「短摘要进、短草稿出」，不做加权，保持可预测）。
+ */
+export function modelCostScore(model: CollectorModelInfo): number {
+	if (isFreeModel(model)) return 0;
+	const cost = model.cost;
+	if (!cost || typeof cost.input !== "number") return Number.POSITIVE_INFINITY;
+	const output = typeof cost.output === "number" ? cost.output : 0;
+	return cost.input + output;
+}
+
+/**
+ * 按「免费优先 → 价格升序 → provider/id 字典序」排名并截断。
+ * 排序含字典序兜底，保证同一份模型表每次选出同一条链（可预测、可复现）。
+ */
+export function rankCollectorModels(
+	models: CollectorModelInfo[],
+	opts: { max?: number; exclude?: CollectorChainEntry[] } = {},
+): CollectorChainEntry[] {
+	const max = Math.max(1, Math.trunc(opts.max ?? 3));
+	const exclude = new Set((opts.exclude ?? []).map((e) => `${e.provider}\u0000${e.id}`));
+	const picked = new Map<string, { entry: CollectorChainEntry; score: number }>();
+	for (const m of models ?? []) {
+		if (!m || typeof m.provider !== "string" || typeof m.id !== "string" || !m.provider || !m.id) continue;
+		const key = `${m.provider}\u0000${m.id}`;
+		if (exclude.has(key) || picked.has(key)) continue;
+		picked.set(key, { entry: { provider: m.provider, id: m.id }, score: modelCostScore(m) });
+	}
+	return [...picked.values()]
+		.sort(
+			(a, b) =>
+				a.score - b.score ||
+				a.entry.provider.localeCompare(b.entry.provider) ||
+				a.entry.id.localeCompare(b.entry.id),
+		)
+		.slice(0, max)
+		.map((x) => x.entry);
+}
+
+/** 合并显式钉扎链与自动补齐链：钉扎在前、整体去重、截断到 max */
+export function mergeCollectorChain(
+	pinned: CollectorChainEntry[],
+	auto: CollectorChainEntry[],
+	max = 3,
+): CollectorChainEntry[] {
+	const seen = new Set<string>();
+	const out: CollectorChainEntry[] = [];
+	for (const e of [...(pinned ?? []), ...(auto ?? [])]) {
+		if (!e || typeof e.provider !== "string" || typeof e.id !== "string" || !e.provider || !e.id) continue;
+		const key = `${e.provider}\u0000${e.id}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push({ provider: e.provider, id: e.id });
+		if (out.length >= Math.max(1, max)) break;
+	}
+	return out;
+}
+
+/** 链的展示/比较用指纹，如 `p1/m1 > p2/m2` */
+export function collectorChainKey(chain: CollectorChainEntry[]): string {
+	return (chain ?? []).map((e) => `${e?.provider ?? "?"}/${e?.id ?? "?"}`).join(" > ");
+}

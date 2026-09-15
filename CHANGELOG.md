@@ -2,6 +2,25 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。版本号从公开发布版开始记起。
 
+## 0.5.0 - 2026-09-15
+
+### 新增
+采集模型链自动挑选（Pi）：采集链不再写死，每次采集时按当前 `~/.pi/agent/models.json` 实时解析——从「已配置凭证」的模型里按价格升序挑（`id` 带 free 标记或单价为 0 的免费模型优先、未知定价垫底），并把会话当前主模型挂在链尾兜底；`collector.models` 退化为「显式钉扎」（仍逐项校验，失效项进日志的「丢弃」列表而非默默失效）。配置新增 `auto`（默认真）、`includeCurrentModel`（默认真）、`max`（默认 3）；解析结果按候选池指纹缓存 6 小时，链内容变化时向 `experience-log.md` 写一行 `采集链` 记录。
+新增 `/evolve-models` 命令：随时打印当前采集链、来源（钉扎/自动）与被丢弃的失效项。
+纯函数库 `evolution-core` 新增 `rankCollectorModels` / `mergeCollectorChain` / `isFreeModel` / `modelCostScore` / `collectorChainKey`，带单测。
+
+### 修复
+采集链静默断流：旧版把链硬编码在扩展里，一旦这些模型从用户的模型表里消失（provider 被删、模型下架、凭证失效），代码在「链为空」分支直接 return——既不写日志也不写状态，扩展心跳看似正常，实际采集彻底停摆且没任何痕迹。现在：① 链从运行时可列举的来源推导，不再硬编码；② 链为空时写一行「采集失败」并落 `state.collectorUnavailable` 标记（链恢复后自动清除），不再静默。
+
+### 变更
+删除了内置的固定采集链（`COLLECTOR_MODEL_CHAIN` 默认为空数组）：升级后采集链完全由你的模型表决定，不再依赖任何第三方免费模型是否还在线。仅想用固定链时，在 `collector.models` 填即可。
+
+### 测试
+evolution-core 单元测试 41 → 51 个（新增免费/成本判定、价格排序、链合并与去重用例）；另用离线 harness 对真实模型注册表跑过五种场景（正常 / 钉扎 provider 被删 / 钉扎项无凭证 / 全池失效 / 缓存命中）验证降级行为。
+
+### 说明
+数据目录、状态文件与配置格式向后兼容：只有 `collector.models` 的旧配置仍能直接用（语义由「唯一链」变为「链首钉扎」）。
+
 ## 0.4.1 - 2026-09-10
 
 ### 修复

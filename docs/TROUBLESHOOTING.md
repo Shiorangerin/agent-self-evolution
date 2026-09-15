@@ -17,10 +17,21 @@ cat ~/.config/agent-self-evolution/state.json   # 系统状态
    python3 core/collect.py --transcript /dev/null --session test --force
    # 若输出「未找到可用的 LLM 后端」→ 配置 SE_LLM_CMD / 安装 claude 或 codex CLI / 配置 SE_API_*
    ```
-2. **是否被节流/上限挡住**：看 `state.json` 的 `lastCollectionAt` 与候选区数量（上限 20）；
-3. **是否条件不满足**：多数任务工具调用 <5 次且无错误，属于正常；`logs/experience-log.md` 有每次采集的流水（「条件不满足」「拒绝沉淀」「候选生成」）；
-4. **是否全部被 LLM 拒绝**：`state.json#rejections` 记录了最近 20 条拒绝原因；
-5. **hook 是否真的触发**：见症状 2。
+2. **Pi 平台：采集链是否为空**（旧版最隐蔽的断流原因）：
+   ```bash
+   # 在 pi 里执行 /evolve-models，会打印当前链、来源与被丢弃的失效项
+   cat "$SE_ROOT/state.json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('collectorChain'), d.get('collectorUnavailable'))"
+   ```
+   链为空（或 `collectorUnavailable=true`）→ `logs/experience-log.md` 里会有一行「采集失败」写清丢弃原因（不在模型表 / 无凭证）。处置：到 pi 里确认模型可用（`pi` 中切换模型能正常工作），或在 `$SE_ROOT/config.json` 的 `collector.models` 钉扎一个确定可用的模型。
+   ```bash
+   # 采集链实时解析结果也会记录在这里（链变化时写一行）
+   grep '采集链' "$SE_ROOT/logs/experience-log.md" | tail -3
+   ```
+3. **是否被节流/上限挡住**：看 `state.json` 的 `lastCollectionAt` 与候选区数量（上限 20）；
+4. **是否条件不满足**：多数任务工具调用 <5 次且无错误，属正常；`logs/experience-log.md` 有每次采集的流水（「条件不满足」「拒绝沉淀」「候选生成」）；
+5. **是否全部被 LLM 拒绝**：`state.json#rejections` 记录了最近 20 条拒绝原因；
+6. **hook 是否真的触发**：见症状 2。
+7. **心跳正常但日志一直不涨**：`state.json#lastSeenAt` 在刷新却既无候选也无拒绝记录 → 说明触发了某条**无日志的早退分支**。先看 `lastCollectionAt` 是不是几天前就不动了（那是断流的典型特征），再按第 2 步查采集链。
 
 ## 症状 2：hook 不触发
 
@@ -51,7 +62,8 @@ cat ~/.config/agent-self-evolution/state.json   # 系统状态
 - **「LLM 调用异常: claude CLI 失败」** → `claude` 未登录（`claude` 命令在终端试一下）；
 - **「codex CLI 失败」** → `codex exec` 不可用或未登录；Codex 多行 prompt 问题已通过 stdin 方式规避；
 - **「LLM 返回空内容」** → 模型输出预算不足（调大 `SE_MAX_OUTPUT_TOKENS`）或模型拒绝任务；
-- **「无法获取模型凭证」**（Pi）→ pi 模型注册表问题，检查 pi 本身可用性；
+- **「无法获取模型凭证」**（Pi）→ pi 模型注册表问题，检查 pi 本身可用性；采集器会**自动跳过**这类模型并降到链上的下一个（丢弃原因写在同一条日志里），无需手改配置；
+- **「采集模型链全部不可用（池=...；链=(空)；丢弃=...）」**（Pi）→ 链上所有候选都拿不到凭证，丢弃原因逐条列在括号里；
 - 拒绝原因与错误信息记录在 `$SE_ROOT/state.json` 的 `rejections` 中。
 
 ## 症状 4：候选格式不符被拒

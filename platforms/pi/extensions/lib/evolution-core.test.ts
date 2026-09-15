@@ -8,12 +8,17 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildTraceSummary,
 	buildTraceText,
+	collectorChainKey,
 	entryText,
 	extractText,
 	extractToolPaths,
+	isFreeModel,
 	isSelfManagementSession,
 	judgeOutcome,
+	mergeCollectorChain,
+	modelCostScore,
 	privatePatterns,
+	rankCollectorModels,
 	sanitizeTraceText,
 	slugify,
 	stripOuterFence,
@@ -272,7 +277,7 @@ describe("touchesPrivatePath（甲方案 2026-09-05：只判工具调用路径�
 	const pats = () => privatePatterns();
 
 	test("真读日记/真读 .env → 熔断", () => {
-		expect(touchesPrivatePath([tc("read", { path: "/Users/someone/Desktop/Diary.md" })], pats())).toBe(true);
+		expect(touchesPrivatePath([tc("read", { path: "/Users/orangerin/Desktop/Diary.md" })], pats())).toBe(true);
 		expect(touchesPrivatePath([tc("bash", { command: "cat ~/.env" })], pats())).toBe(true);
 		expect(touchesPrivatePath([tc("bash", { command: "ls ~/.ssh/id_ed25519" })], pats())).toBe(true);
 		expect(touchesPrivatePath([tc("read", { path: "/app/web/.env.local" })], pats())).toBe(true);
@@ -290,7 +295,7 @@ describe("touchesPrivatePath（甲方案 2026-09-05：只判工具调用路径�
 	test("用户/助手正文提到文件名不再熔断（提到≠触及）", () => {
 		const entries = [
 			{ type: "message", message: { role: "user", content: "桌面上有 Diary.md 和 TODO.md" } },
-			tc("bash", { command: "eza /Users/someone/Desktop | head" }),
+			tc("bash", { command: "eza /Users/orangerin/Desktop | head" }),
 		];
 		expect(touchesPrivatePath(entries, pats())).toBe(false);
 	});
@@ -311,5 +316,85 @@ describe("touchesPrivatePath（甲方案 2026-09-05：只判工具调用路径�
 		expect(paths).toContain("Diary.md");
 		expect(paths).toContain("/tmp");
 		expect(paths.some((p) => p.includes("password"))).toBe(false);
+	});
+});
+
+// ─── 采集模型链自动挑选（对应 2026-09-03 写死的链因模型下架而静默死亡） ───────────
+
+describe("isFreeModel", () => {
+	test("id 带 free 标记（:free / -free / 段内 free）判为免费", () => {
+		expect(isFreeModel({ provider: "p", id: "vendor/model:free" })).toBe(true);
+		expect(isFreeModel({ provider: "p", id: "vendor/model-free" })).toBe(true);
+		expect(isFreeModel({ provider: "p", id: "vendor/free-model" })).toBe(true);
+	});
+	test("单价全 0 视为免费；有价即有成本", () => {
+		expect(isFreeModel({ provider: "p", id: "m", cost: { input: 0, output: 0 } })).toBe(true);
+		expect(isFreeModel({ provider: "p", id: "m", cost: { input: 0.5, output: 0 } })).toBe(false);
+	});
+	test("不含 free 且无 cost 字段的模型不算免费（未知定价按有成本处理）", () => {
+		expect(isFreeModel({ provider: "p", id: "freedom-model" })).toBe(false);
+		expect(isFreeModel({ provider: "p", id: "m" })).toBe(false);
+	});
+});
+
+describe("modelCostScore", () => {
+	test("免费为 0；有价为输入+输出之和；未知定价视为最贵", () => {
+		expect(modelCostScore({ provider: "p", id: "m:free" })).toBe(0);
+		expect(modelCostScore({ provider: "p", id: "m", cost: { input: 1.5, output: 7.5 } })).toBe(9);
+		expect(modelCostScore({ provider: "p", id: "m" })).toBe(Number.POSITIVE_INFINITY);
+	});
+});
+
+describe("rankCollectorModels", () => {
+	const pool = [
+		{ provider: "z", id: "expensive", cost: { input: 10, output: 30 } },
+		{ provider: "a", id: "cheap", cost: { input: 0.1, output: 0.2 } },
+		{ provider: "a", id: "free-one", cost: { input: 0, output: 0 } },
+		{ provider: "a", id: "mystery" },
+		{ provider: "a", id: "cheap", cost: { input: 0.1, output: 0.2 } }, // 重复项
+	];
+	test("免费优先 → 价格升序 → 未知定价垫底，重复项去重", () => {
+		expect(rankCollectorModels(pool, { max: 4 })).toEqual([
+			{ provider: "a", id: "free-one" },
+			{ provider: "a", id: "cheap" },
+			{ provider: "z", id: "expensive" },
+			{ provider: "a", id: "mystery" },
+		]);
+	});
+	test("freeOnly 语义并入排名：免费项自然排最前；exclude 剔除已钉扎项；max 截断", () => {
+		expect(rankCollectorModels(pool, { max: 9, exclude: [{ provider: "a", id: "free-one" }] })[0]).toEqual({
+			provider: "a",
+			id: "cheap",
+		});
+		expect(rankCollectorModels(pool, { max: 1 })).toHaveLength(1);
+	});
+	test("同价模型按 provider/id 字典序，保证可复现", () => {
+		const same = [
+			{ provider: "b", id: "x", cost: { input: 1, output: 1 } },
+			{ provider: "a", id: "y", cost: { input: 1, output: 1 } },
+		];
+		expect(rankCollectorModels(same).map((e) => e.provider)).toEqual(["a", "b"]);
+	});
+	test("空池 / 脏数据不抛异常", () => {
+		expect(rankCollectorModels([])).toEqual([]);
+		expect(rankCollectorModels([null as any, { provider: "", id: "x" } as any])).toEqual([]);
+	});
+});
+
+describe("mergeCollectorChain / collectorChainKey", () => {
+	test("钉扎在前、去重、截断", () => {
+		const merged = mergeCollectorChain(
+			[{ provider: "p", id: "pinned" }],
+			[{ provider: "p", id: "pinned" }, { provider: "q", id: "auto1" }, { provider: "r", id: "auto2" }],
+			2,
+		);
+		expect(merged).toEqual([
+			{ provider: "p", id: "pinned" },
+			{ provider: "q", id: "auto1" },
+		]);
+	});
+	test("指纹用于「链变化才留痕」的比较", () => {
+		expect(collectorChainKey([{ provider: "p", id: "a" }, { provider: "q", id: "b" }])).toBe("p/a > q/b");
+		expect(collectorChainKey([])).toBe("");
 	});
 });

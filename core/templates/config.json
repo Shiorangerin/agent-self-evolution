@@ -5,6 +5,9 @@
     "apiBase": "",
     "apiKey": "",
     "apiModel": "",
-    "models": []
+    "models": [],
+    "auto": true,
+    "includeCurrentModel": true,
+    "max": 3
   }
 }
