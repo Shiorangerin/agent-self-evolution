@@ -72,13 +72,16 @@ install_core() {
   cp "$REPO_DIR/scripts/candidate_preflight.py" "$SE_ROOT/scripts/"
   cp "$REPO_DIR/scripts/skill_scorecard.py"     "$SE_ROOT/scripts/"
   cp "$REPO_DIR/scripts/evolve_brief.sh"       "$SE_ROOT/scripts/"
+  cp "$REPO_DIR/scripts/evolve_finish.py"      "$SE_ROOT/scripts/"
+  cp "$REPO_DIR/scripts/evolve_trail.py"       "$SE_ROOT/scripts/"
   cp "$REPO_DIR/scripts/healthcheck.sh"        "$SE_ROOT/scripts/"
-  chmod +x "$SE_ROOT/scripts/evolve_brief.sh" "$SE_ROOT/scripts/healthcheck.sh"
+  chmod +x "$SE_ROOT/scripts/evolve_brief.sh" "$SE_ROOT/scripts/healthcheck.sh" \
+           "$SE_ROOT/scripts/evolve_finish.py" "$SE_ROOT/scripts/evolve_trail.py"
   cp -R "$REPO_DIR/docs/flow/." "$SE_ROOT/docs/"
   # 老路径迁移提示：Pi 扩展曾硬编码 ~/.pi/agent/evolution，老用户数据不会自动搬家
   local legacy="$HOME/.pi/agent/evolution"
   if [[ "$SE_ROOT" != "$legacy" && -d "$legacy" && -f "$legacy/state.json" ]]; then
-    warn "发现老数据目录 $legacy（历史统计/候选在其中），新目录为 $SE_ROOT；如需延续统计可手动合并：cp -rn \"$legacy/\"* \"$SE_ROOT/\"（-n 不覆盖新文件）"
+    warn "发现老数据目录 ${legacy}（历史统计/候选在其中），新目录为 ${SE_ROOT}；如需延续统计可手动合并：cp -rn \"${legacy}/\"* \"${SE_ROOT}/\"（-n 不覆盖新文件）"
   fi
   say "核心就绪（collect.py / track_usage.py / init.py / templates）"
   say "流程脚本与细则就绪（scripts/evolve_brief.sh、docs/）"
@@ -134,7 +137,7 @@ EOF
       3) backend="claude" ;;
       4) backend="codex" ;;
       5) backend="auto" ;;
-      *) say "跳过模型配置（可稍后编辑 $cfg）"; return 0 ;;
+      *) say "跳过模型配置（可稍后编辑 ${cfg}）"; return 0 ;;
     esac
     python3 - "$cfg" "$backend" "$api_base" "$api_key" "$api_model" "$llm_cmd" <<'PY'
 import json, sys
@@ -153,7 +156,7 @@ with open(cfg_path, "w", encoding="utf-8") as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
     f.write("\n")
 PY
-    say "已把采集器后端（$backend）写入 $cfg"
+    say "已把采集器后端（${backend}）写入 ${cfg}"
   else
     cat <<EOF
 [install] ⚠️  采集器模型未配置：当前默认探测顺序为 自定义命令 → claude CLI → codex CLI → OpenAI 兼容 API。
@@ -179,7 +182,7 @@ install_pi() {
   cp "$REPO_DIR/platforms/pi/extensions/skill-usage.ts"   "$pi_dir/extensions/"
   mkdir -p "$pi_dir/skills/self-evolve"
   cp "$REPO_DIR/platforms/pi/skills/self-evolve/SKILL.md" "$pi_dir/skills/self-evolve/SKILL.md"
-  say "Pi 扩展与技能已复制到 $pi_dir，请在 pi 里执行 /reload 生效"
+  say "Pi 扩展与技能已复制到 ${pi_dir}，请在 pi 里执行 /reload 生效"
 }
 
 install_claude_code() {

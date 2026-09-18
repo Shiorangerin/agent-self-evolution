@@ -135,14 +135,45 @@ printf '\n[experience-log 总行数 %s，超 100 行需归档；日志与记忆�
 wc -c "$ROOT/logs/experience-log.md" "$ROOT/memory/USER.md" "$ROOT/memory/LESSONS.md" 2>/dev/null | sed 's/^/  /'
 
 hr "6. 技能记分卡"
+SC_SUMMARY=""
 if [ "$SKIP_SCORE" = "1" ]; then
   echo "已跳过（--no-scorecard）"
 else
   SC="$(script_of skill_scorecard.py)"
-  if [ -f "$SC" ]; then "$PY" "$SC"; else echo "!! 找不到 skill_scorecard.py"; fi
+  if [ -f "$SC" ]; then
+    SC_OUT="$("$PY" "$SC" 2>&1)"
+    echo "$SC_OUT"
+    SC_SUMMARY="$(echo "$SC_OUT" | rg '^小结' | tail -1)"
+  else
+    echo "!! 找不到 skill_scorecard.py"
+  fi
 fi
 
-hr "7. 异常与待办提示"
+hr "7. 本轮走向（按探测结果选路线）"
+count_dirs() {
+  "$PY" -c "import os,sys;d=os.path.join(sys.argv[1],sys.argv[2]);print(sum(1 for x in os.listdir(d) if os.path.isdir(os.path.join(d,x))) if os.path.isdir(d) else 0)" "$ROOT" "$1"
+}
+CAND=$(count_dirs candidates)
+PROF=$(count_dirs profiles)
+PROB=$(echo "$SC_SUMMARY" | rg -o '问题 [0-9]+' | rg -o '[0-9]+' | head -1)
+IDLE=$(echo "$SC_SUMMARY" | rg -o '闲置 [0-9]+' | rg -o '[0-9]+' | head -1)
+PROB=${PROB:-?}
+IDLE=${IDLE:-?}
+printf '候选 %s / 画像草稿 %s / 问题技能 %s / 闲置技能 %s\n' "$CAND" "$PROF" "$PROB" "$IDLE"
+if [ "$CAND" = "0" ] && [ "$PROF" = "0" ] && [ "$PROB" = "0" ] && [ "$IDLE" = "0" ]; then
+  cat <<'TIP'
+→ 快速通道：本轮无事可做，只需
+   ① 本探测  ② evolve_finish.py 一条命令收尾  ③ 按 docs/report-template.md 输出简报
+   跳过全量体检复核、LESSONS 考古与逐项陈述，工具往返控制在 4 次以内。
+TIP
+else
+  cat <<'TIP'
+→ 常规路线：有对象待处理，按 SKILL.md 第二至第五步执行。
+   仅在技能失败归因需要回查轨迹时用 scripts/evolve_trail.py，禁止整读轨迹文件。
+TIP
+fi
+
+hr "8. 异常与待办提示"
 REPO="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
 if [ -n "$REPO" ]; then
   REL="${ROOT#"$REPO"/}"

@@ -8,6 +8,7 @@
 # 可用 SE_ROOT 指定数据根目录。任何一项失败即退出码 1。
 
 set -u
+SE_ROOT="${SE_ROOT:-}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SKILL_UNIT="platforms/pi/skills/self-evolve/SKILL.md"
 fail=0
@@ -28,7 +29,7 @@ fi
 echo "== 2/4 候选区预检 =="
 DATA_ROOT="${SE_ROOT:-$HOME/.config/agent-self-evolution}"
 if [ ! -f "$DATA_ROOT/state.json" ]; then
-	echo "数据目录尚未初始化（$DATA_ROOT），跳过预检与记分卡（先运行 install.sh 或 core/init.py）"
+	echo "数据目录尚未初始化（${DATA_ROOT}），跳过预检与记分卡（先运行 install.sh 或 core/init.py）"
 	SKIP_DATA=1
 else
 	SKIP_DATA=0
@@ -50,12 +51,12 @@ for cand in "$ROOT/$SKILL_UNIT" "$HOME/.pi/agent/skills/self-evolve/SKILL.md"; d
 	[ -f "$cand" ] && SKILL_FILE="$cand" && break
 done
 if [ -z "$SKILL_FILE" ]; then
-	echo "未找到进化流程技能文件，跳过（仓库内应为 $SKILL_UNIT）"
+	echo "未找到进化流程技能文件，跳过（仓库内应为 ${SKILL_UNIT}）"
 else
 	miss=0
 	refs="$(rg -o --no-filename '\$SE_ROOT/(docs|scripts)/[A-Za-z0-9_.-]+' "$SKILL_FILE" | sort -u)"
 	if [ -z "$refs" ]; then
-		echo "未发现 $SE_ROOT 形式的文档或脚本引用，跳过（文件：$SKILL_FILE）"
+		echo "未发现 \$SE_ROOT 形式的文档或脚本引用，跳过（文件：${SKILL_FILE}）"
 	fi
 	for ref in $refs; do
 		rel="${ref#\$SE_ROOT/}"
@@ -65,7 +66,7 @@ else
 		if [ -f "$ROOT/$rel" ]; then
 			echo "✓ $rel"
 		elif [ -f "$ROOT/$repo_rel" ]; then
-			echo "✓ $rel（仓库中为 $repo_rel，安装后就位）"
+			echo "✓ ${rel}（仓库中为 ${repo_rel}，安装后就位）"
 		else
 			echo "✗ 引用缺失：$ref"; miss=1
 		fi

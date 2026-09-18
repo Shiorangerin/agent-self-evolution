@@ -23,7 +23,9 @@ docs/flow/           进化流程细则（安装到 <SE_ROOT>/docs/，按需读�
   skill-health.md      技能体检阈值与归档/压缩
   report-template.md   报告模板
 scripts/             零 token 工具链
-  evolve_brief.sh      进化一次探测（状态/候选/体检/草稿/日志）
+  evolve_brief.sh      进化一次探测（状态/候选/体检/草稿/日志/本轮走向）
+  evolve_finish.py     收尾一条命令（计数/日志/体检/提交）
+  evolve_trail.py      会话轨迹定点回查（按关键词抽取并限长）
   candidate_preflight.py  候选预检
   skill_scorecard.py      技能记分卡
   healthcheck.sh          一键体检
@@ -108,7 +110,7 @@ Python 等价实现 `core/track_usage.py`（hook 归一化轨迹后调用），�
 | 采集（每次任务） | 1 次低成本 LLM 调用 | 阈值 5 次工具调用；摘要截断 2500 字符；reasoningEffort minimal；maxTokens 2000；无缓存 |
 | 采集链解析（每次采集） | 0（纯规则） | 只读注册表 + 凭证探测；按候选池指纹缓存 6 小时；链上按由廉到贵排序（免费优先） |
 | 采集（不满足条件） | 0（纯规则） | 先统计后调用 |
-| 进化（手动） | 深度（预期） | 仅手动触发；候选有上限；流程本身受成本纪律约束（一次探测、细则按需读、轨迹禁整读） |
+| 进化（手动） | 深度（预期） | 仅手动触发；候选有上限；流程本身受成本纪律约束：快速通道 4 次往返以内、常规路线 10 次以内，一次探测与收尾各一次命令，细则按需读，轨迹禁整读 |
 | 使用统计 | 0 | 纯规则 |
 
 ## 8. 已知权衡

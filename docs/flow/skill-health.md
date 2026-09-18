@@ -16,7 +16,7 @@
 
 复核顺序：
 
-1. 先看 `usage.json` 的 `failReasons`。必要时回查该技能 `lastSession` 对应的轨迹确认原因。结果归因是启发式判断，可能误判，以原始轨迹为准。回查时只抽取匹配片段，不要整文件读取轨迹。
+1. 先看 `usage.json` 的 `failReasons`。必要时回查该技能 `lastSession` 对应的轨迹确认原因，用 `python3 $SE_ROOT/scripts/evolve_trail.py <会话片段> <报错关键词> --max 30 --chars 8000` 定点抽取。结果归因是启发式判断，可能误判，以原始轨迹为准，不要整文件读取轨迹。
 2. 判定为技能未覆盖的场景，给该技能补「常见问题」，`state.json` 的 `stats.skillsRepaired` 加一。
 3. 判定为步骤错误或内容过时，重写对应步骤，同样 `stats.skillsRepaired` 加一。
 4. 屡败零胜，即失败不少于 3 次且成功为 0，建议淘汰并征求用户决定。
