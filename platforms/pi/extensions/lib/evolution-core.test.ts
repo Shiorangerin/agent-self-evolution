@@ -277,7 +277,7 @@ describe("touchesPrivatePath（甲方案 2026-09-05：只判工具调用路径�
 	const pats = () => privatePatterns();
 
 	test("真读日记/真读 .env → 熔断", () => {
-		expect(touchesPrivatePath([tc("read", { path: "/Users/orangerin/Desktop/Diary.md" })], pats())).toBe(true);
+		expect(touchesPrivatePath([tc("read", { path: "/Users/someone/Desktop/Diary.md" })], pats())).toBe(true);
 		expect(touchesPrivatePath([tc("bash", { command: "cat ~/.env" })], pats())).toBe(true);
 		expect(touchesPrivatePath([tc("bash", { command: "ls ~/.ssh/id_ed25519" })], pats())).toBe(true);
 		expect(touchesPrivatePath([tc("read", { path: "/app/web/.env.local" })], pats())).toBe(true);
@@ -295,7 +295,7 @@ describe("touchesPrivatePath（甲方案 2026-09-05：只判工具调用路径�
 	test("用户/助手正文提到文件名不再熔断（提到≠触及）", () => {
 		const entries = [
 			{ type: "message", message: { role: "user", content: "桌面上有 Diary.md 和 TODO.md" } },
-			tc("bash", { command: "eza /Users/orangerin/Desktop | head" }),
+			tc("bash", { command: "eza /Users/someone/Desktop | head" }),
 		];
 		expect(touchesPrivatePath(entries, pats())).toBe(false);
 	});

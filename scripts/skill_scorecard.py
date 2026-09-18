@@ -10,7 +10,8 @@
   🌟 优秀   score ≥ 70 且近期真实使用且无失败嫌疑
   ✅ 健康   其余正常技能
   ⚠️ 问题   失败率高（附 failReasons，需人工复核是否假失败）
-  😴 闲置   可信记录显示 ≥15 天未用 → 归档候选
+  😴 闲置   可信记录显示 ≥15 天未用（高产技能满 30 天）→ 归档候选
+  🌙 沉睡   半月未用但累计使用 ≥10 次 → 仅提示，暂不归档
   ❓ 未观测 无可信使用记录（含历史污染清洗后的观察期条目）
 
 只读不改：本脚本绝不修改任何文件，归档/淘汰决策权在用户。
@@ -37,7 +38,9 @@ EXEMPT = {"self-evolve", "self-evolve-maintenance"}
 
 
 
-IDLE_DAYS = 15          # 闲置阈值：AI 技能迭代快，半月未用即列为归档候选（与 docs/flow/skill-health.md 一致）
+IDLE_DAYS = 15          # 闲置观察阈值：AI 技能迭代快，半月未用即进入观察
+IDLE_DAYS_HIGH_USE = 30 # 高产技能（累计使用 ≥ HIGH_USE_COUNT）延长到 30 天仍未用才算归档候选
+HIGH_USE_COUNT = 10     # 「高产」判定线
 FRESH_DAYS = 14         # 「近期使用」阈值
 EXCELLENT_SCORE = 70    # 优秀分数线
 
@@ -116,8 +119,14 @@ def score_one(name: str, info: dict | None) -> dict:
         grade = "❓ 未观测"
         notes.append("无可信使用时间（观察期，等待修复后的扩展重新积累）")
     elif days is not None and days >= IDLE_DAYS:
-        grade = "😴 闲置"
-        notes.append(f"{days:.0f} 天未用 → 归档候选")
+        if days >= IDLE_DAYS_HIGH_USE or count < HIGH_USE_COUNT:
+            grade = "😴 闲置"
+            why = "" if days >= IDLE_DAYS_HIGH_USE else f"，累计使用仅 {count} 次"
+            notes.append(f"{days:.0f} 天未用{why} → 归档候选")
+        else:
+            grade = "🌙 沉睡"
+            notes.append(f"{days:.0f} 天未用但累计使用 {count} 次 → 沉睡高产，"
+                         f"满 {IDLE_DAYS_HIGH_USE} 天仍未用才列为归档候选")
     elif total >= EXCELLENT_SCORE and days is not None and days <= FRESH_DAYS and fail == 0:
         grade = "🌟 优秀"
     if signal == "weak" and count >= 10:
@@ -138,8 +147,8 @@ def main() -> int:
     show_all = "--all" in sys.argv[1:]
     usage = load().get("skills", {})
     rows = [score_one(n, usage.get(n)) for n in enabled_skills()]
-    order = {"⚠️ 问题": 0, "😴 闲置": 3, "❓ 未观测": 4, "🌟 优秀": 5, "✅ 健康": 6}
-    rows.sort(key=lambda r: (order[r["grade"]], -r["total"]))
+    order = {"⚠️ 问题": 0, "🛡️ 元技能": 1, "😴 闲置": 3, "🌙 沉睡": 4, "❓ 未观测": 5, "🌟 优秀": 6, "✅ 健康": 7}
+    rows.sort(key=lambda r: (order.get(r["grade"], 99), -r["total"]))
 
     shown = rows if show_all else [r for r in rows if r["grade"] != "✅ 健康"]
     print(f"技能记分卡：启用 {len(rows)} 个 | 显示 {'全量' if show_all else '非健康项'}\n")
@@ -156,7 +165,7 @@ def main() -> int:
     problem = [r["name"] for r in rows if r["grade"] == "⚠️ 问题"]
     from collections import Counter
     cnt = Counter(r["grade"] for r in rows)
-    labels = ["🌟 优秀", "✅ 健康", "❓ 未观测", "⚠️ 问题", "😴 闲置", "🛡️ 元技能"]
+    labels = ["🌟 优秀", "✅ 健康", "❓ 未观测", "⚠️ 问题", "😴 闲置", "🌙 沉睡", "🛡️ 元技能"]
     print("\n小结：" + " / ".join(f"{lab} {cnt.get(lab, 0)}" for lab in labels))
     if archive:
         print("\n归档候选（逐项征求用户决策后才可执行，绝不自行删除）：")

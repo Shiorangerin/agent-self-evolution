@@ -37,6 +37,19 @@ merge_platform_doc() {
   say "已合并平台说明到 $dst"
 }
 
+# ---------- 带备份的文件复制 ----------
+# 目标已存在且内容不同时先备份再覆盖，避免静默丢弃用户对扩展/技能的本地修改
+copy_file() {
+  local src="$1" dst="$2"
+  mkdir -p "$(dirname "$dst")"
+  if [[ -f "$dst" ]] && ! cmp -s "$src" "$dst"; then
+    local bak="${dst}.bak-$(date +%Y%m%d%H%M%S)"
+    cp "$dst" "$bak"
+    say "已备份用户原文件 → $bak"
+  fi
+  cp "$src" "$dst"
+}
+
 # ---------- 0. 环境检查 ----------
 command -v python3 >/dev/null 2>&1 || die "需要 python3（≥3.8），请先安装"
 mkdir -p "$SE_ROOT"
@@ -69,12 +82,9 @@ install_core() {
   python3 "$SE_ROOT/core/init.py"
   # 流程脚本与流程细则一并装到数据目录，克隆目录删除后进化流程仍可自包含运行
   mkdir -p "$SE_ROOT/scripts" "$SE_ROOT/docs"
-  cp "$REPO_DIR/scripts/candidate_preflight.py" "$SE_ROOT/scripts/"
-  cp "$REPO_DIR/scripts/skill_scorecard.py"     "$SE_ROOT/scripts/"
-  cp "$REPO_DIR/scripts/evolve_brief.sh"       "$SE_ROOT/scripts/"
-  cp "$REPO_DIR/scripts/evolve_finish.py"      "$SE_ROOT/scripts/"
-  cp "$REPO_DIR/scripts/evolve_trail.py"       "$SE_ROOT/scripts/"
-  cp "$REPO_DIR/scripts/healthcheck.sh"        "$SE_ROOT/scripts/"
+  for s in candidate_preflight.py skill_scorecard.py evolve_brief.sh evolve_finish.py evolve_trail.py healthcheck.sh; do
+    copy_file "$REPO_DIR/scripts/$s" "$SE_ROOT/scripts/$s"
+  done
   chmod +x "$SE_ROOT/scripts/evolve_brief.sh" "$SE_ROOT/scripts/healthcheck.sh" \
            "$SE_ROOT/scripts/evolve_finish.py" "$SE_ROOT/scripts/evolve_trail.py"
   cp -R "$REPO_DIR/docs/flow/." "$SE_ROOT/docs/"
@@ -178,10 +188,10 @@ install_pi() {
     warn "未找到 $pi_dir/extensions，跳过 Pi 适配（未安装 pi-coding-agent；仅安装 all 时可忽略）"
     return 1
   fi
-  cp "$REPO_DIR/platforms/pi/extensions/self-evolve.ts"   "$pi_dir/extensions/"
-  cp "$REPO_DIR/platforms/pi/extensions/skill-usage.ts"   "$pi_dir/extensions/"
+  copy_file "$REPO_DIR/platforms/pi/extensions/self-evolve.ts"   "$pi_dir/extensions/self-evolve.ts"
+  copy_file "$REPO_DIR/platforms/pi/extensions/skill-usage.ts"   "$pi_dir/extensions/skill-usage.ts"
   mkdir -p "$pi_dir/skills/self-evolve"
-  cp "$REPO_DIR/platforms/pi/skills/self-evolve/SKILL.md" "$pi_dir/skills/self-evolve/SKILL.md"
+  copy_file "$REPO_DIR/platforms/pi/skills/self-evolve/SKILL.md" "$pi_dir/skills/self-evolve/SKILL.md"
   say "Pi 扩展与技能已复制到 ${pi_dir}，请在 pi 里执行 /reload 生效"
 }
 

@@ -78,18 +78,25 @@ def check_candidate(cand: Path, enabled: dict[str, str]) -> tuple[list[str], lis
 
     name = None
     has_desc = False
+    desc_bare = False
     for l in fm_body:
         m = re.match(r'^name\s*:\s*["\']?([^"\'\r\n]+)["\']?\s*$', l)
         if m:
             name = m.group(1).strip()
-        if re.match(r"^description\s*:\s*\S", l):
+        if re.match(r"^description\s*:\s*\S", l, re.I):
             has_desc = True
+        elif re.match(r"^description\s*:\s*$", l, re.I):
+            # 值为空或多行折叠（值在后续行）：不算缺字段，但提示人工确认
+            has_desc = True
+            desc_bare = True
     if name is None:
         issues.append("缺 name 字段")
     elif not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
         issues.append(f"name 含非法字符（须小写字母数字连字符）: {name}")
     if not has_desc:
         issues.append("缺 description 字段")
+    elif desc_bare:
+        warns.append("description 值为空或多行折叠，人工确认是否有实质内容")
 
     # ② 大小
     size = len(raw)

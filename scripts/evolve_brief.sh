@@ -43,6 +43,16 @@ for a in "$@"; do
   esac
 done
 
+# rg 缺失时回退 grep -E，避免探测结论静默失准
+if command -v rg >/dev/null 2>&1; then
+  match()  { rg "$@"; }
+  match_o() { rg -o "$@"; }
+else
+  match()  { grep -E "$@"; }
+  match_o() { grep -oE "$@"; }
+  echo "[提示] 未找到 rg，已回退 grep -E（部分匹配行为略有差异）" >&2
+fi
+
 hr() { printf '\n== %s ==\n' "$1"; }
 
 if [ ! -f "$ROOT/state.json" ]; then
@@ -143,7 +153,7 @@ else
   if [ -f "$SC" ]; then
     SC_OUT="$("$PY" "$SC" 2>&1)"
     echo "$SC_OUT"
-    SC_SUMMARY="$(echo "$SC_OUT" | rg '^小结' | tail -1)"
+    SC_SUMMARY="$(echo "$SC_OUT" | match '^小结' | tail -1)"
   else
     echo "!! 找不到 skill_scorecard.py"
   fi
@@ -155,10 +165,13 @@ count_dirs() {
 }
 CAND=$(count_dirs candidates)
 PROF=$(count_dirs profiles)
-PROB=$(echo "$SC_SUMMARY" | rg -o '问题 [0-9]+' | rg -o '[0-9]+' | head -1)
-IDLE=$(echo "$SC_SUMMARY" | rg -o '闲置 [0-9]+' | rg -o '[0-9]+' | head -1)
+PROB=$(echo "$SC_SUMMARY" | match_o '问题 [0-9]+' | match_o '[0-9]+' | head -1)
+IDLE=$(echo "$SC_SUMMARY" | match_o '闲置 [0-9]+' | match_o '[0-9]+' | head -1)
 PROB=${PROB:-?}
 IDLE=${IDLE:-?}
+if [ -z "$SC_SUMMARY" ] && [ "$SKIP_SCORE" != "1" ]; then
+  echo "!! 记分卡小结无法解析（记分卡异常或输出格式变化），本轮按常规路线处理"
+fi
 printf '候选 %s / 画像草稿 %s / 问题技能 %s / 闲置技能 %s\n' "$CAND" "$PROF" "$PROB" "$IDLE"
 if [ "$CAND" = "0" ] && [ "$PROF" = "0" ] && [ "$PROB" = "0" ] && [ "$IDLE" = "0" ]; then
   cat <<'TIP'
@@ -179,7 +192,7 @@ if [ -n "$REPO" ]; then
   REL="${ROOT#"$REPO"/}"
   cd "$REPO" || exit 0
   git status --porcelain -- "$REL" | head -20
-  DELETED="$(git status --porcelain -- "$REL/profiles" 2>/dev/null | rg '^ ?D' || true)"
+  DELETED="$(git status --porcelain -- "$REL/profiles" 2>/dev/null | match '^ ?D' || true)"
   if [ -n "$DELETED" ]; then
     echo "!! profiles 存在被删除的已跟踪文件，须向用户求证后再提炼（禁止自动恢复）："
     echo "$DELETED"

@@ -49,6 +49,12 @@ def resolve_session(arg: str) -> Path | None:
     return max(hits, key=lambda f: f.stat().st_mtime)
 
 
+def sanitize(text: str) -> str:
+    """轨迹内容是未经验证的原始数据：压平换行与控制字符，避免被当成指令或撑爆输出。"""
+    flat = "".join(" " if ch in "\r\n\t" else ch for ch in text if ch.isprintable() or ch in "\r\n\t")
+    return " ".join(flat.split())
+
+
 def role_of(obj: dict) -> str:
     msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
     return str(msg.get("role") or obj.get("type") or "?")
@@ -118,6 +124,7 @@ def main() -> int:
                 start = max(0, at - args.snippet // 2)
                 pieces.append(text[start : at + args.snippet // 2])
             piece = " … ".join(pieces) if pieces else text[: args.snippet]
+            piece = sanitize(piece)
             row = f"[{idx} {role_of(obj)} {t}] {piece}"
             if used + len(row) > args.chars:
                 row = row[: max(0, args.chars - used)]
