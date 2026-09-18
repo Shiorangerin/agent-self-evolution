@@ -6,6 +6,9 @@ agent-self-evolution — 数据目录初始化
   candidates/   候选技能区（采集器写入，进化流程审查）
   profiles/     用户画像草稿区（采集器写入，进化流程提炼进 USER.md）
   skills/       已启用技能源文件
+  archived/     归档技能源文件
+  docs/         进化流程细则（从仓库 docs/flow/ 安装）
+  scripts/      流程脚本（候选预检 / 记分卡 / 一次性探测 / 体检）
   memory/       长期记忆（USER.md 用户画像 / LESSONS.md 经验与教训）
   logs/         经验日志、每日总结、被拒草稿
   state.json    系统状态与统计
@@ -27,6 +30,9 @@ STRUCTURE = [
     "candidates",
     "profiles",
     "skills",
+    "archived",
+    "docs",
+    "scripts",
     "memory",
     "logs/session-summaries",
     "logs/archive",

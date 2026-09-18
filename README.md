@@ -70,7 +70,8 @@ AI 编码助手是**无状态**的：一次任务中学到的经验，下次任�
         └──────────────────────────┬──────────────────────────────┘
                                    ▼  （你手动说一句「进化」）
         ┌─────────────────────────────────────────────────────────┐
-        │   [进化流程] 审查候选 → 格式校验 → 查重 → 价值评估         │
+        │   [进化流程] 先跑 evolve_brief.sh 一次探测（状态/候选/体检/草稿） │
+        │   审查候选 → 格式校验 → 查重 → 价值评估                    │
         │   启用（软链）/ 并入现有 / 淘汰（记录原因）                 │
         │   技能体检（闲置/问题/优质三级）→ 归档 / 修复 / 保留      │
         │   提炼画像草稿 → USER.md；沉淀经验教训 → LESSONS.md → git 提交 │
@@ -150,7 +151,9 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 | `memory/LESSONS.md` | 长期记忆：经验与教训、失败教训、规避方法 |
 | `logs/experience-log.md` | 经验沉淀日志：每次沉淀的来源、结论、去向，可追溯 |
 | `logs/session-summaries/` | 每日工作总结存档 |
-| `logs/archive/` | 按月归档的历史经验日志（主日志超限后自动归档） |
+| `logs/archive/` | 按月归档的历史经验日志与画像草稿（主日志超限后自动归档） |
+| `docs/` | 进化流程细则：候选审查、技能体检与归档、报告模板。按需读取，不常驻上下文 |
+| `scripts/` | 流程脚本：`evolve_brief.sh`（一次探测）、`candidate_preflight.py`（候选预检）、`skill_scorecard.py`（技能记分卡）、`healthcheck.sh`（一键体检） |
 | `state.json` | 系统状态：统计计数、上次进化/采集时间、拒绝原因 |
 | `config.json` | 采集器配置：后端选择、便宜/免费模型、Pi 采集链（自动挑最便宜的 + 可选钉扎，见「采集器模型选择」） |
 | `usage.json` | 技能使用统计（强/弱信号 + 成功/失败/未知结果归因 + 失败原因） |
@@ -187,11 +190,13 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 
 ### 审查（Review）
 
-进化流程对每个候选执行三步校验：
+进化流程第一步先跑 `scripts/evolve_brief.sh`，一次拿到状态、候选、体检与草稿全貌；然后对每个候选执行三步校验：
 
-1. **格式校验**：`name`（小写字母数字连字符）、`description`（≤1024 字符、写明何时使用）、SKILL.md ≤8000 字符；
+1. **格式校验**：`name`（小写字母数字连字符）、`description`（≤1024 字符、写明何时使用）、SKILL.md ≤8000 字符；可先用 `scripts/candidate_preflight.py` 零 token 机械预检；
 2. **查重**：与已启用技能语义重复 → 并入或淘汰；
 3. **价值评估**：会重复出现吗？步骤可复用吗？有真实注意点吗？
+
+完整判定标准与处置命令见 `$SE_ROOT/docs/candidate-review.md`（安装后位于数据目录 `docs/`），流程按需读取，不占用常驻上下文。
 
 ### 启用 / 归档
 
@@ -225,9 +230,10 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 - 采集只做**低成本判断**：轨迹摘要截断（默认 2500 字符）、低推理强度（`reasoningEffort: minimal`）、输出预算受限（2000 tokens）、无缓存开销；
 - **增量采集**：同一会话只分析上次采集点之后的新内容，长程对话不重复花钱；
 - **节流与上限**：全局节流可配置（默认关闭，因为增量采集不丢数据）、候选区堆积上限 20 个自动暂停；
-- 深度进化（候选审查、技能重构）只在**你手动触发**时发生。
+- 深度进化（候选审查、技能重构）只在**你手动触发**时发生；
+- 进化流程本身也有成本纪律：一次探测脚本（`scripts/evolve_brief.sh`）替代逐步扫描，细则文档按需读取而不常驻上下文，禁止整文件读取会话轨迹。
 
-配套零 token 工具链：`scripts/candidate_preflight.py`（候选预检）、`scripts/skill_scorecard.py`（技能健康记分卡）、`scripts/healthcheck.sh`（一键体检）把一切机械判断从 LLM 挪到纯规则脚本。
+配套零 token 工具链：`scripts/evolve_brief.sh`（一次探测）、`scripts/candidate_preflight.py`（候选预检）、`scripts/skill_scorecard.py`（技能健康记分卡）、`scripts/healthcheck.sh`（一键体检）把一切机械判断从 LLM 挪到纯规则脚本。
 
 ### 4. 完全手动触发，你永远拥有控制权
 
@@ -257,6 +263,8 @@ ls ~/.config/agent-self-evolution/candidates/   # 看是否出现了候选技能
 - **优质技能**：多次使用且零失败 → 确认保留。
 
 技能总量控制在 ~40 个以内，避免上下文被 description 淹没。
+
+具体阈值、归因方法与归档/恢复/压缩命令见 `$SE_ROOT/docs/skill-health.md`。
 
 ### 9. 增量采集不丢数据
 

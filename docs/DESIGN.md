@@ -18,6 +18,15 @@ core/                平台无关核心
   collect.py         采集器：轨迹→LLM→候选（Python 标准库）
   init.py            数据目录初始化
   templates/         初始文件模板
+docs/flow/           进化流程细则（安装到 <SE_ROOT>/docs/，按需读取）
+  candidate-review.md  候选审查与处置
+  skill-health.md      技能体检阈值与归档/压缩
+  report-template.md   报告模板
+scripts/             零 token 工具链
+  evolve_brief.sh      进化一次探测（状态/候选/体检/草稿/日志）
+  candidate_preflight.py  候选预检
+  skill_scorecard.py      技能记分卡
+  healthcheck.sh          一键体检
 platforms/           平台适配层（薄）
   pi/                TS 扩展（采集 + 使用统计）+ 进化技能
   claude-code/       Stop hook + CLAUDE.md
@@ -70,13 +79,13 @@ agent_settled / Stop hook 触发
 触发词：「总结一天的工作」/「进化」（各平台流程文档定义）。
 
 五步：
-1. 初始化：读 state.json、experience-log 尾部；
+1. 探测：跑 `scripts/evolve_brief.sh` 一次拿到状态摘要、候选清单、启用区计数与超长清单、待处理画像草稿、日志尾部与记分卡分级；
 2. 审查候选：格式校验（name/description/大小）→ 查重 → 价值评估 → 启用（mkdir+cp+ln）/ 并入 / 淘汰（meta.md 记 verdict）；
 3. 技能体检（三线）：usage.json 的 outcomes/failReasons → 闲置（≥60 天未用）/ 问题（失败率高）/ 优质（成功率高）三级处置，征求用户决定；
 4. 维护记忆：USER.md（纯净条目）+ LESSONS.md（格式模板）；
-5. 收尾：state.json 计数 + 经验日志 + git 提交。
+5. 收尾：state.json 计数 + 经验日志 + git 提交 + 三节报告。
 
-**关键设计**：进化依赖 agent 的 LLM 判断（审查本身是认知任务），流程文档（SKILL.md / CLAUDE.md / AGENTS.md）提供严格的检查清单与命令模板，把「判断」约束在可审计的框架内。
+**关键设计**：① 进化依赖 agent 的 LLM 判断（审查本身是认知任务），流程文档（SKILL.md / CLAUDE.md / AGENTS.md）只保留路由与护栏，把判定閈值与命令模板放在 `docs/flow/` 按需读取，既不常驻上下文又不丢严谨性；② 流程本身也受成本纪律约束：一次探测脚本代替逐步扫描，禁止整文件读取会话轨迹，状态文件只取摘要。
 
 ## 6. 使用统计（反馈回路）
 
@@ -99,7 +108,7 @@ Python 等价实现 `core/track_usage.py`（hook 归一化轨迹后调用），�
 | 采集（每次任务） | 1 次低成本 LLM 调用 | 阈值 5 次工具调用；摘要截断 2500 字符；reasoningEffort minimal；maxTokens 2000；无缓存 |
 | 采集链解析（每次采集） | 0（纯规则） | 只读注册表 + 凭证探测；按候选池指纹缓存 6 小时；链上按由廉到贵排序（免费优先） |
 | 采集（不满足条件） | 0（纯规则） | 先统计后调用 |
-| 进化（手动） | 深度（预期） | 仅手动触发；候选有上限 |
+| 进化（手动） | 深度（预期） | 仅手动触发；候选有上限；流程本身受成本纪律约束（一次探测、细则按需读、轨迹禁整读） |
 | 使用统计 | 0 | 纯规则 |
 
 ## 8. 已知权衡

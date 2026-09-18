@@ -1,186 +1,94 @@
 ---
 name: self-evolve
-description: agent-self-evolution 的自我进化流程（用户手动触发模式）。当用户说"进化""自我进化""沉淀技能""技能候选""进化一下""技能体检"时触发。流程：审查 <SE_ROOT>/candidates/ 中的技能候选（预检脚本 + 价值评估后启用或淘汰）→ 技能体检（记分卡诊断，归档/淘汰逐项征求用户决策）→ 根据近期经验更新现有技能 → 维护 USER.md/LESSONS.md 记忆 → 更新 state.json 与经验日志 → git 提交 → 按固定模板输出进化报告。
+description: agent-self-evolution 的自我进化流程，由用户手动触发。当用户说「进化」「自我进化」「沉淀技能」「技能候选」「技能体检」时使用。覆盖技能候选审查与启用、已启用技能体检与处置、长期记忆维护（USER.md 与 LESSONS.md）、状态计数与经验日志更新、git 提交与报告输出。
 ---
 
 # 自我进化流程
 
-> 本流程由用户**手动触发**，没有任何自动定时唤醒。用户说一声就做，不说就不做。
+## 定位
 
-## 前置理解
+手动触发的自维护流程，把采集器沉淀的技能候选与用户画像草稿转化为受治理的技能与长期记忆。不自动定时，不自动唤醒，用户不主动要求就不执行。
 
-进化系统数据位于 `$SE_ROOT`（默认 `~/.config/agent-self-evolution/`，可通过环境变量 `SE_ROOT` 覆盖），架构见仓库 `README.md`：
+数据根目录为 `$SE_ROOT`，默认 `~/.config/agent-self-evolution/`，可用环境变量覆盖。执行入口：
 
-- `candidates/`：经验采集器在任务结束后自动沉淀的候选技能（未启用，不进上下文）
-- `profiles/`：画像采集器（与技能采集同触发条件）自动沉淀的用户画像草稿（未提炼，不进上下文，待本流程第四步提炼进 USER.md）
-- `skills/`：已启用技能的源文件，在 Pi 上通过软链挂到 `~/.pi/agent/skills/` 生效
-- `memory/USER.md`、`memory/LESSONS.md`：长期记忆（用户画像 / 经验与教训）
-- `logs/experience-log.md`：经验沉淀日志（可追溯）
-- `logs/session-summaries/`：~~每日工作总结存档~~（功能已删除，仅存历史）
-- `state.json`：系统状态与统计
+| 用户意图 | 执行范围 |
+|---|---|
+| 进化、自我进化、审查候选 | 完整流程，第一至第五步 |
+| 技能体检 | 仅第三步的体检与报告，不做候选启用、归档、记忆写入等写操作 |
+| 其他情况 | 不执行进化流程、不主动提示、不夹带相关操作 |
 
-## 触发
+## 成本纪律
 
-用户说 **「进化」** 或 `/skill:self-evolve` 即启动下方完整流程；说 **「技能体检」** 则只跑记分卡诊断与报告（第三步的体检部分），不做候选启用等写操作。
+流程自身也消耗上下文。以下规则用于把单次进化的读取量与工具往返压到最低，每次执行都必须遵守。
 
----
+1. **一次探测**：先运行 `bash $SE_ROOT/scripts/evolve_brief.sh`，它一次输出状态摘要、候选清单、启用区计数与超长清单、待处理画像草稿、经验日志尾部、记分卡分级与异常提示。后续步骤复用其输出，不重复扫描同类信息。
+2. **禁止整文件读取会话轨迹**：轨迹文件单条可达数 MB。需要回查时只用 `rg` 或 `python3` 抽取匹配片段，并限制输出长度，建议不超过 200 行或 8 KB。
+3. **记忆文件按需读**：`memory/LESSONS.md` 只读需要查证的部分，命中主题后用 `rg` 定位条目再精读，不要整文件读取。
+4. **状态文件不读全文**：`state.json` 的 `rejections` 与 `collectedUpTo` 明细不进上下文，只取 `stats`、`lastEvolutionAt`、`lastEvolution`。
+5. **报告不复述输出**：只写结论与关键命令，异常附原文。
 
-## 进化流程
+## 执行步骤
 
-### 第一步：初始化
+### 第一步：探测
 
-1. 用 `python3`/`jq` 只读 `$SE_ROOT/state.json` 的**统计摘要**（`stats`、`lastEvolutionAt`、`lastCollectionAt`），**不读全文**——`rejections`/`collectedUpTo` 明细不进上下文，仅在需要时按需查看
-2. 用 `tail -30 $SE_ROOT/logs/experience-log.md` 只看尾部，了解最近沉淀情况（完整历史在 `logs/archive/` 按月归档）
+运行 `evolve_brief.sh`，取得本轮全部机械事实。候选区非空则执行第二步，画像草稿非空则在第四步处理。
 
-### 第二步：审查候选技能
+### 第二步：候选审查
 
-用 `eza -la $SE_ROOT/candidates/` 列出候选（每个子目录一个候选，含 `SKILL.md` + `meta.md`）。
+候选区为空则跳过，报告中记为 0 候选。
 
-**⓪ 预检脚本（推荐先跑，零 token 机械检查）**
-`python3 <仓库>/scripts/candidate_preflight.py` 一键完成下方格式 / 大小 / 截断启发式（代码围栏不闭合、尾部中断）/ 同名查重的机械检查；硬伤须修复或淘汰，警示项人工复核。
+对每个候选：先运行 `python3 $SE_ROOT/scripts/candidate_preflight.py [候选名 ...]` 取得机械检查结果，再逐一阅读 `SKILL.md` 与 `meta.md` 做价值判断。
 
-对每个候选逐一执行（先阅读 `SKILL.md` 与 `meta.md`，meta 里有来源会话、工具/错误计数）：
+判定标准、启用命令、淘汰与并入规则见 `$SE_ROOT/docs/candidate-review.md`，处理候选前必读。
 
-**① 格式校验（任一不满足即淘汰）**
-- frontmatter 有 `name`：小写字母数字连字符，1-64 字符
-- frontmatter 有 `description`：中文，≤1024 字符，写明了「何时使用」
-- SKILL.md 总大小 ≤ 8000 字符（软上限；多个候选超限且内容重叠时，先合并压缩到限内再启用，而不是直接全淘汰）
+### 第三步：技能体检
 
-**② 查重**
-- 对比 `~/.pi/agent/skills/` 现有技能，语义重复或高度重叠 → 合并进现有技能或淘汰
+依据 `evolve_brief.sh` 的记分卡输出与 `usage.json` 中的 `outcomes`、`failReasons` 分类处置：
 
-**③ 价值评估**
-- 这类任务以后会重复出现吗？步骤清晰、可复用吗？有真实经验/注意点吗？
-- 一次性的琐碎内容、明显噪声 → 淘汰
+| 分级 | 处置 |
+|---|---|
+| 优秀、健康 | 不做操作，报告中确认 |
+| 未观测 | 处于观察期，不处置 |
+| 问题 | 复核失败归因，能修则修；屡败零胜的征求用户决定 |
+| 闲置 | 列出后征求用户归档决定，确认后才执行 |
+| 元技能 | 仅提示超长，不做任何处置 |
+| 用户手动管理的技能 | 完全豁免，仅只读观察使用数据 |
 
-**处置**
+阈值判定、归因方法、修复流程、归档与恢复命令、超长压缩流程见 `$SE_ROOT/docs/skill-health.md`，执行处置动作前必读。
 
-- **通过 → 启用**（候选区 → 启用区 + 软链）：
-  ```bash
-  mkdir -p $SE_ROOT/skills/<name>
-  cp $SE_ROOT/candidates/<slug>/SKILL.md $SE_ROOT/skills/<name>/SKILL.md
-  ln -sfn $SE_ROOT/skills/<name> ~/.pi/agent/skills/<name>
-  ```
-  然后在 `experience-log.md` 追加一行：`| 时间 | <slug> | 启用 | <一句话摘要> | skills/<name>/ |`
+**总量硬约束**：启用区技能数不超过约 40 个，实测目录数须与 `stats.skillsEnabled` 一致，不一致以实测为准直接修正 stats。超限时列出合并、归档、淘汰候选并附计数依据，逐项征求用户决策后执行，绝不自行删除技能。
 
-- **淘汰**：在候选目录的 `meta.md` 末尾追加 `candidate-verdict: rejected` 与原因，然后删除该候选目录（或在日志中说明保留原因）。若候选质量过差直接删除并记日志。
-- 每个候选（无论启用/并入/淘汰）审查后都在其 `meta.md` 末尾追加 `candidate-verdict: enabled/merged/rejected` 与一句原因，便于追溯与防误删。
-
-- **并入现有技能**：用 `edit` 把有价值内容合并进对应技能的 SKILL.md，再删除候选。
-
-### 第三步：更新现有技能
-
-0. **技能体检（使用情况报告）**：先跑 `python3 <仓库>/scripts/skill_scorecard.py` 自动产出六档分级（🌟优秀 ✅健康 ❓未观测 ⚠️问题 😴闲置 🛡️元技能）与归档候选清单；再读取 `$SE_ROOT/usage.json` 复核数据，向用户汇报并征求处置决定：
-
-   **元技能豁免**：`self-evolve` / `self-evolve-maintenance` 是进化流程定义本身，豁免闲置归档与自动压缩（规则不得吃掉自己的元规则）；其超长问题仅提示，结构优化须用户决策。
-
-   **① 闲置技能**：`lastUsedAt` 距今天数 **≥60 天** 未使用（含从未被记录过使用且启用已超 60 天的），列出清单（最后使用时间、次数），征求归档决定：
-   - 用户确认归档 → 执行归档操作（见下方「归档技能」）
-   - 用户决定保留 → 不动，记入汇报
-
-   **② 问题技能（健康度）**：读取每个技能的 `outcomes`（success/failure/unknown）与 `failReasons`，计算失败次数与失败率 `failure/(success+failure)`，列出 **失败 ≥2 次，或失败率 >50% 且失败 ≥1 次** 的技能清单（附 failReasons 报错原文片段），逐一复核处置：
-   - 先看 `usage.json` 里的 `failReasons`，必要时回会话记录读该技能 `lastSession` 的原始轨迹确认失败原因（结果归因是启发式，可能误判，以原始轨迹为准）
-   - **注意点缺失**：失败原因属于技能未覆盖的场景/问题 → 用 `edit` 给该技能 SKILL.md 补「常见问题」，`state.json` 的 `stats.skillsRepaired` +1
-   - **步骤错误/过时**：技能内容与实际不符 → 用 `edit` 重写对应步骤，同样记 `stats.skillsRepaired` +1
-   - **屡败零胜**（failure ≥3 且 success = 0）→ 建议淘汰，征求用户决定
-   - 拿不准的向用户汇报求决策，绝不自行删技能
-
-   **③ 优质技能**：`success ≥3` 且失败率为 0 的技能 → 汇报中确认「表现良好」，不做任何操作
-
-   汇报时给出每个技能的使用次数与成功/失败/未知计数，让用户一眼看清谁好谁坏。
-
-阅读 `memory/LESSONS.md`、今天的会话总结与近期 `experience-log.md`，判断是否有现有技能需要更新：
-- 步骤过时/有更优做法/有新增注意点 → 用 `edit` 修改 `$SE_ROOT/skills/<name>/SKILL.md`（软链指向源文件）
-- 已启用技能若长期未被使用或与新的候选重叠 → 考虑合并/淘汰
-
-### 超长技能压缩（省 token 规范）
-
-不在主会话人肉重写超长技能：
-1. 用低成本模型起草压缩稿：prompt 附原 SKILL.md 全文 + 硬约束（保留全部注意点/命令/参数/实测结论，只删冗余叙述、重复示例；≤8000 字符）
-2. 人工只审 diff 确认零信息损失后落盘；拿不准的段落保留原状
-3. 单技能 >8K 或涉及用户隐私边界的，先逐项征求用户意见再动
-
-### 归档技能（用户确认后执行）
-
-归档 = 让技能从上下文消失但源文件与历史保留（区别于删除）：
-
-```bash
-mkdir -p $SE_ROOT/archived
-mv $SE_ROOT/skills/<name> $SE_ROOT/archived/<name>   # 源文件移入存档区
-unlink ~/.pi/agent/skills/<name>                     # 移除软链（技能从上下文消失）
-```
-
-恢复（用户需要时）：
-
-```bash
-ln -sfn $SE_ROOT/archived/<name> ~/.pi/agent/skills/<name>
-```
-
-归档/恢复后：`usage.json` 中对应条目保留（恢复时计数延续）；在 `experience-log.md` 记录归档/恢复行；git 提交保证可回滚。
+同时阅读 `memory/LESSONS.md` 与近期 `logs/experience-log.md`，判断是否有已启用技能需要更新，范围包括步骤过时、出现更优做法、新增注意点。更新直接修改 `$SE_ROOT/skills/<name>/SKILL.md`。
 
 ### 第四步：维护记忆
 
-- **用户画像提炼**（来源：`$SE_ROOT/profiles/` 采集草稿）：
-  1. 读取该目录下全部草稿（每个子目录含 `profile.md` 条目列表 + `meta.md` 来源信息）；
-  2. 与现有 `memory/USER.md` 融合：新信息合并为精炼条目；互相矛盾以较新的草稿为准；语义重复的直接丢弃；
-  3. **USER.md 写入规范（严格遵守）**：只保留跨会话成立的高信号条目；每条一句话直接陈述；**正向表述优先，避免否定句式**；**禁止任何举例**；内容**必须纯净**——禁止文件头说明、`来源：xxx` 标注、HTML 注释等任何元信息（USER.md 若通过系统提示注入如 Pi 的 `APPEND_SYSTEM.md` 软链，错误条目会持续影响行为）；语言与用户输入一致；
-  4. 处理完的草稿目录移入 `logs/archive/profiles-YYYY-MM/`（保留可回溯，不删除）；
-  5. 在经验日志记录：画像草稿 N 份 → 提炼 +M 条 / 丢弃 K 条。
-- 提炼经验与教训 → 追加到 `memory/LESSONS.md`（严格按文件中的格式模板；LESSONS.md 若不注入 prompt，可保留「来源」标注用于追溯）
-- 记忆条目要精炼，避免重复；已有的不再追加
+**画像草稿提炼**。`profiles/` 为空则跳过。提炼前先检查 `profiles/` 是否有被删除的已跟踪文件，出现即停止并向用户求证，不自动恢复。
+
+1. 读取全部草稿，每份含 `profile.md` 条目与 `meta.md` 来源信息，与 `memory/USER.md` 融合。新信息精炼为条目，语义重复的丢弃，互相矛盾的以较新草稿为准，已有的不追加。
+2. 仅有单次证据的疑似偏好不进库，写入报告待用户决策一节。
+3. 剔除可识别个人身份的信息，包括姓名、学校或单位、职务、班级、住址、联系方式、亲友关系。
+4. 处理完的草稿目录移入 `logs/archive/profiles-YYYY-MM/`，保留可回溯，不删除。
+5. 在经验日志记录草稿份数、提炼条数与丢弃条数。
+
+**USER.md 写入规范**。该文件通常经平台机制注入上下文（Pi 的 `APPEND_SYSTEM.md` 软链、Claude Code 的全局 `CLAUDE.md` 引用、Codex 的 AGENTS.md 引用），内容必须纯净：只写实际条目，每条一句话直接陈述，只保留跨会话成立的高信号内容，正向表述优先，禁止举例，禁止文件头说明、来源标注、注释等任何元信息，语言与用户输入一致。
+
+**LESSONS.md**。严格按文件内的格式模板追加条目，保留来源标注便于追溯。条目精炼，已有的不重复追加。
 
 ### 第五步：收尾
 
-1. 更新 `state.json`：`lastEvolutionAt`（当前时间）、`stats.skillsEnabled`、`stats.skillsUpdated`、`stats.candidatesRejected`、`stats.skillsRepaired`（本次修复/补问题的技能数）等计数
-2. 在 `experience-log.md` 追加本次进化总结行：`| 时间 | - | 进化 | 审查X候选：启用A/淘汰B/并入C；更新技能D；记忆+E | - |`
-3. **日志维护**（保持文件精简，避免进化时读取膨胀）：
-   - `experience-log.md` 数据行超过 100 行时，把旧条目归档到 `logs/archive/experience-log-YYYY-MM.md`（表头保留，主文件只留最近 40 条）
-   - `state.json` 的 `rejections` 超过 20 条时修剪到最近 10 条（历史在归档日志里）
-   - `collectedUpTo` 由扩展自动清理（只保留仍存在的会话），无需手动处理
-4. git 提交（保证可追溯回滚；若 `$SE_ROOT` 或其所在目录是 git 仓库）：
-   ```bash
-   cd <仓库根> && git add <SE_ROOT 相对路径>
-   git commit -m "self-evolve: <今日工作总结+进化摘要>"
-   ```
+1. 运行 `bash $SE_ROOT/scripts/healthcheck.sh`。分级执行：核心脚本或平台 hook 本轮有改动时跑全部检查项；未改动时用 `--quick`，只跑候选预检、记分卡与文档引用检查。
+2. 更新 `state.json`：`lastEvolutionAt`、`stats.skillsEnabled`、`stats.skillsUpdated`、`stats.skillsRepaired`、`stats.candidatesRejected`、`stats.candidatesMerged` 等计数。同步刷新 `lastEvolution` 快照，字段为 `at`、`candidatesReviewed`、`enabled`、`rejected`、`merged`、`skillsRepaired`、`memoryAdded`，保证上次进化明细可追溯。
+3. 在 `logs/experience-log.md` 追加总结行：`| 时间 | - | 进化 | 审查X候选：启用A/淘汰B/并入C；更新技能D；记忆+E | - |`
+4. 日志维护：`experience-log.md` 数据行超过 100 行时，把旧条目归档到 `logs/archive/experience-log-YYYY-MM.md`，主文件保留表头与最近 40 条；`state.json` 的 `rejections` 超过 20 条时修剪到最近 10 条；`collectedUpTo` 由采集器自动清理。
+5. 若数据根目录位于 git 仓库中，提交本次变更，commit message 写明本轮动作，保证可回滚。
+6. 按 `$SE_ROOT/docs/report-template.md` 输出报告。
 
-## 约束与安全护栏（必须遵守）
+## 约束与护栏
 
-- **绝不修改** 用户的 `AGENTS.md`、TODO 等用户主导的规则与私密文件；进化流程**不主动改动**用户已有配置文件
-- 自动生成的候选必须经本流程审查后才启用，不直接信任采集器输出
-- 所有变更以明文文件存在，透明、可回滚（git 历史）
-- 启用区技能总量控制：超过约 40 个时优先合并/淘汰，避免 description 污染上下文
-- 进化过程只做与进化相关的事，不夹带其他操作
-- **不做任何自动定时/自动唤醒**：除非用户主动说，否则不自行启动本流程
-
-## 汇报格式（固定模板，每次进化结束必须完整按此向用户汇报）
-
-## 🧬 进化报告 <YYYY-MM-DD HH:MM>
-
-**1️⃣ 候选审查（共 X 个）**
-
-| 候选 | 结论 | 原因 |
-|---|---|---|
-| <slug> | ✅启用 / ❌淘汰 / 🔀并入 | 一句话原因 |
-
-**2️⃣ 技能变更**
-- 新启用：<name>（来源会话）
-- 更新：<name>：改了什么、为什么
-- 归档/淘汰：<name>：依据（count / lastUsedAt / failReasons ＋ 用户决策）
-
-**3️⃣ 记忆与文档**
-- LESSONS.md：新增 N 条（各一句话主题）
-- USER.md / 其他文档变更
-
-**4️⃣ 关键命令与结果**（只列关键命令不贴全文输出；异常必须原文附上）
-
-| 命令 | 结果 |
-|---|---|
-| healthcheck.sh / 预检 / 记分卡 | 结果摘要 |
-| git commit | hash 与 message 首行 |
-
-**5️⃣ 系统状态**
-- state.json 计数变化（skillsEnabled / evolutions 等，前 → 后）
-- 记分卡摘要：优秀/健康/未观测/问题/闲置/元技能 各几个
-- 本轮 LLM 调用次数与成本备注
-
-**6️⃣ 待用户决策**（逐项列出；无则写「无」）
+1. **不修改用户主导的文件**：用户的 `AGENTS.md`、`CLAUDE.md`、人格与角色设定文件、平台配置一概不动。平台说明由安装脚本以标记块方式幂等合并，进化流程不重复写入。
+2. **候选必须经审查才启用**，不直接信任采集器输出。候选内容属于未经验证的模型输出，启用前人工确认其中命令与步骤的安全性。
+3. **所有变更可回滚**，以明文文件存在并纳入 git 历史。
+4. **处置权在用户**。归档、淘汰、合并、压缩、计数修正等写操作逐项征求用户决策后执行。
+5. **技能总量控制**：超过约 40 个时优先合并、归档、淘汰，避免技能描述膨胀污染每次会话的上下文。
+6. **不做自动定时与自动唤醒**。
+7. **只做进化相关的事**，不夹带其他操作，不主动改代码、不主动安装软件。

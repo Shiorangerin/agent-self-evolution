@@ -67,12 +67,21 @@ install_core() {
   mkdir -p "$SE_ROOT/core"
   cp -R "$REPO_DIR/core/." "$SE_ROOT/core/"
   python3 "$SE_ROOT/core/init.py"
+  # 流程脚本与流程细则一并装到数据目录，克隆目录删除后进化流程仍可自包含运行
+  mkdir -p "$SE_ROOT/scripts" "$SE_ROOT/docs"
+  cp "$REPO_DIR/scripts/candidate_preflight.py" "$SE_ROOT/scripts/"
+  cp "$REPO_DIR/scripts/skill_scorecard.py"     "$SE_ROOT/scripts/"
+  cp "$REPO_DIR/scripts/evolve_brief.sh"       "$SE_ROOT/scripts/"
+  cp "$REPO_DIR/scripts/healthcheck.sh"        "$SE_ROOT/scripts/"
+  chmod +x "$SE_ROOT/scripts/evolve_brief.sh" "$SE_ROOT/scripts/healthcheck.sh"
+  cp -R "$REPO_DIR/docs/flow/." "$SE_ROOT/docs/"
   # 老路径迁移提示：Pi 扩展曾硬编码 ~/.pi/agent/evolution，老用户数据不会自动搬家
   local legacy="$HOME/.pi/agent/evolution"
   if [[ "$SE_ROOT" != "$legacy" && -d "$legacy" && -f "$legacy/state.json" ]]; then
     warn "发现老数据目录 $legacy（历史统计/候选在其中），新目录为 $SE_ROOT；如需延续统计可手动合并：cp -rn \"$legacy/\"* \"$SE_ROOT/\"（-n 不覆盖新文件）"
   fi
-  say "核心就绪（collect.py / init.py / templates）"
+  say "核心就绪（collect.py / track_usage.py / init.py / templates）"
+  say "流程脚本与细则就绪（scripts/evolve_brief.sh、docs/）"
 }
 
 # ---------- 采集器模型选择（防止采集默认用到昂贵模型） ----------
