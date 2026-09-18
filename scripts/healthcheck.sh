@@ -36,6 +36,13 @@ else
 	if python3 "$ROOT/scripts/candidate_preflight.py"; then :; else fail=1; fi
 fi
 
+# rg 缺失时回退 grep -E，避免小结静默取不到
+if command -v rg >/dev/null 2>&1; then
+	match() { rg "$@"; }
+else
+	match() { grep -E "$@"; }
+fi
+
 echo "== 3/4 技能治理记分卡（小结）=="
 if [ "$SKIP_DATA" = "1" ]; then
 	echo "已跳过（数据目录未初始化）"
