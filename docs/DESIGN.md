@@ -83,7 +83,7 @@ agent_settled / Stop hook 触发
 五步：
 1. 探测：跑 `scripts/evolve_brief.sh` 一次拿到状态摘要、候选清单、启用区计数与超长清单、待处理画像草稿、日志尾部与记分卡分级；
 2. 审查候选：格式校验（name/description/大小）→ 查重 → 价值评估 → 启用（mkdir+cp+ln）/ 并入 / 淘汰（meta.md 记 verdict）；
-3. 技能体检（三线）：usage.json 的 outcomes/failReasons → 闲置（≥60 天未用）/ 问题（失败率高）/ 优质（成功率高）三级处置，征求用户决定；
+3. 技能体检（三线）：usage.json 的 outcomes/failReasons → 闲置（≥15 天未用）/ 问题（失败率高）/ 优质（成功率高）三级处置，征求用户决定；
 4. 维护记忆：USER.md（纯净条目）+ LESSONS.md（格式模板）；
 5. 收尾：state.json 计数 + 经验日志 + git 提交 + 三节报告。
 

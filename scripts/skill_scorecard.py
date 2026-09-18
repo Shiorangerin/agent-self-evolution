@@ -10,7 +10,7 @@
   🌟 优秀   score ≥ 70 且近期真实使用且无失败嫌疑
   ✅ 健康   其余正常技能
   ⚠️ 问题   失败率高（附 failReasons，需人工复核是否假失败）
-  😴 闲置   可信记录显示 ≥60 天未用 → 归档候选
+  😴 闲置   可信记录显示 ≥15 天未用 → 归档候选
   ❓ 未观测 无可信使用记录（含历史污染清洗后的观察期条目）
 
 只读不改：本脚本绝不修改任何文件，归档/淘汰决策权在用户。
@@ -37,7 +37,7 @@ EXEMPT = {"self-evolve", "self-evolve-maintenance"}
 
 
 
-IDLE_DAYS = 60          # 闲置阈值（与 self-evolve SKILL.md 体检标准一致）
+IDLE_DAYS = 15          # 闲置阈值：AI 技能迭代快，半月未用即列为归档候选（与 docs/flow/skill-health.md 一致）
 FRESH_DAYS = 14         # 「近期使用」阈值
 EXCELLENT_SCORE = 70    # 优秀分数线
 

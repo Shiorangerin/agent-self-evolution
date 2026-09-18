@@ -2,6 +2,11 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。版本号从公开发布版开始记起。
 
+## 0.6.1 - 2026-09-18
+
+### 变更
+闲置技能判定阈值由 60 天收紧到 15 天（`scripts/skill_scorecard.py` 的 `IDLE_DAYS`）：AI 工具与技能形态迭代快，半月未用的技能多半已被新做法替代。脚本只把技能列为**归档候选**，归档本身仍逐项由用户决定；判定结果同时给出使用次数，避免把季节性沉睡的高产技能当成死技能。同步更新 `docs/flow/skill-health.md`、`docs/DESIGN.md` 与 README。
+
 ## 0.6.0 - 2026-09-18
 
 ### 新增
